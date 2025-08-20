@@ -39,7 +39,7 @@ class DatabaseManager:
         self.engine = create_engine(
             f"sqlite:///{self.config.path}",
             echo=self.config.echo,
-            poolclass=pool.StaticPool if self.config.pool_size > 1 else pool.NullPool,
+            poolclass=pool.NullPool,
             connect_args={
                 "check_same_thread": False,
                 "timeout": 30

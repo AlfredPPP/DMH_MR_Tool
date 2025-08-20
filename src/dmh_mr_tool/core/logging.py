@@ -18,7 +18,9 @@ def setup_logging(
         level: str = "INFO",
         log_file: Optional[Path] = None,
         max_bytes: int = 5_242_880,
-        backup_count: int = 5
+        backup_count: int = 5,
+        enable_console: bool = True,
+        enable_file: bool = True
 ) -> None:
     """
     Configure structured logging for the application
@@ -28,6 +30,8 @@ def setup_logging(
         log_file: Path to log file
         max_bytes: Maximum size of log file before rotation
         backup_count: Number of backup files to keep
+        enable_console: Whether to print log on the console
+        enable_file: Whether to start log file handler with rotation
     """
     # Configure structlog
     structlog.configure(
@@ -59,12 +63,13 @@ def setup_logging(
     root_logger.setLevel(getattr(logging, level.upper()))
 
     # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, level.upper()))
-    root_logger.addHandler(console_handler)
+    if enable_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(getattr(logging, level.upper()))
+        root_logger.addHandler(console_handler)
 
     # File handler with rotation
-    if log_file:
+    if log_file and enable_file:
         from logging.handlers import RotatingFileHandler
 
         log_file.parent.mkdir(parents=True, exist_ok=True)

@@ -59,13 +59,20 @@ class PathConfig(BaseModel):
 
     @validator('download_path', 'backup_path', 'log_path', 'temp_path')
     def ensure_directory_exists(cls, v):
-        v.mkdir(parents=True, exist_ok=True)
+        if not v.exists():
+            raise ValueError(f"Directory {v} does not exist")
+        return v
+
+    @validator('shared_config_path')
+    def validate_shared_path(cls, v):
+        if not v.exists():
+            raise ValueError(f"Shared config directory {v} does not exist")
         return v
 
 
 class LogConfig(BaseModel):
     """Logging configuration"""
-    level: str = Field(default="INFO", regex="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+    level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
     format: str = "json"
     max_file_size: int = Field(default=5_242_880, ge=1_048_576)  # 5MB default, min 1MB
     backup_count: int = Field(default=5, ge=1, le=20)
@@ -105,6 +112,18 @@ class AppConfig:
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "AppConfig":
         """Create configuration from dictionary"""
+
+        env_value = config_dict.get('environment', {}).get('environment', 'development').lower()
+
+        def get_env_value(section: str, key_base: str):
+            """load prod_* or test_* config"""
+            if section not in config_dict:
+                return None
+            if env_value == "testing":
+                return config_dict[section].get(f"test_{key_base}")
+            else:
+                return config_dict[section].get(f"prod_{key_base}")
+
         # Convert string paths to Path objects
         if 'paths' in config_dict:
             for key in ['download_path', 'backup_path', 'log_path', 'temp_path', 'shared_config_path']:
@@ -116,6 +135,38 @@ class AppConfig:
                 config_dict['database']['path'] = Path(config_dict['database']['path'])
             if 'backup_path' in config_dict['database']:
                 config_dict['database']['backup_path'] = Path(config_dict['database']['backup_path'])
+            # Convert string boolean to actual boolean
+            if 'echo' in config_dict['database']:
+                config_dict['database']['echo'] = config_dict['database']['echo'] == 'true'
+
+        # Convert string values to appropriate types for scraper config
+        if 'scraper' in config_dict:
+            for key in ['max_retries', 'timeout', 'concurrent_downloads']:
+                if key in config_dict['scraper']:
+                    config_dict['scraper'][key] = int(config_dict['scraper'][key])
+            if 'rate_limit_delay' in config_dict['scraper']:
+                config_dict['scraper']['rate_limit_delay'] = float(config_dict['scraper']['rate_limit_delay'])
+
+        # Convert logging config types
+        if 'logging' in config_dict:
+            if 'max_file_size' in config_dict['logging']:
+                config_dict['logging']['max_file_size'] = int(config_dict['logging']['max_file_size'])
+            if 'backup_count' in config_dict['logging']:
+                config_dict['logging']['backup_count'] = int(config_dict['logging']['backup_count'])
+            if 'enable_console' in config_dict['logging']:
+                config_dict['logging']['enable_console'] = config_dict['logging']['enable_console'] == 'true'
+            if 'enable_file' in config_dict['logging']:
+                config_dict['logging']['enable_file'] = config_dict['logging']['enable_file'] == 'true'
+
+        # Convert main config booleans
+        if 'debug' in config_dict.get('environment', {}):
+            config_dict['debug'] = config_dict['environment']['debug'] == 'true'
+
+        if 'dry_run' in config_dict.get('environment', {}):
+            config_dict['dry_run'] = config_dict['environment']['dry_run'] == 'true'
+
+        # Get environment value
+        env_value = config_dict.get('environment', {}).get('environment', 'development')
 
         # Create nested configs
         database = DatabaseConfig(**config_dict.get('database', {}))
@@ -124,14 +175,14 @@ class AppConfig:
         logging = LogConfig(**config_dict.get('logging', {}))
 
         return cls(
-            environment=Environment(config_dict.get('environment', 'development')),
+            environment=Environment(env_value),
             database=database,
             scraper=scraper,
             paths=paths,
             logging=logging,
             debug=config_dict.get('debug', False),
             dry_run=config_dict.get('dry_run', False),
-            user=config_dict.get('user')
+            user=config_dict.get('user', {}).get('default_user')
         )
 
 
@@ -148,33 +199,95 @@ class ConfigManager:
     def load(self, config_path: Optional[Path] = None) -> AppConfig:
         """Load configuration from file or environment"""
         if config_path is None:
-            # Try to load from environment variable
-            config_path_str = os.getenv("DMH_CONFIG_PATH")
-            if config_path_str:
-                config_path = Path(config_path_str)
-            else:
-                # Default to shared drive location
-                config_path = Path("//shared/configs/dmh_mr_tool/config.ini")
+            # Try to load from config_path.ini
+            config_path_ini = Path("config/config_path.ini")
+            if config_path_ini.exists():
+                parser = ConfigParser()
+                parser.read(config_path_ini)
+                config_path = Path(parser.get("config", "path"))
 
-        if config_path.exists():
-            self._config = AppConfig.from_ini(config_path)
-            logger.info("Configuration loaded", path=str(config_path))
-        else:
-            # Use default configuration
-            self._config = AppConfig()
-            logger.warning("Using default configuration",
-                           attempted_path=str(config_path))
+        if not config_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
+        self._config = AppConfig.from_ini(config_path)
+        logger.info("Configuration loaded", path=str(config_path))
         return self._config
 
     @property
     def config(self) -> AppConfig:
         """Get current configuration"""
         if self._config is None:
-            self.load()
+            raise RuntimeError("Configuration not loaded. Call load() first.")
         return self._config
 
 
 # Global config instance
 config_manager = ConfigManager()
 get_config = lambda: config_manager.config
+
+
+'''
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "AppConfig":
+        """Create configuration from dictionary"""
+
+        # 获取 environment
+        env_value = config_dict.get('environment', {}).get('environment', 'development').lower()
+
+        # 根据环境切换路径配置
+        def get_env_value(section: str, key_base: str):
+            """读取 prod_* 或 test_* 配置"""
+            if section not in config_dict:
+                return None
+            if env_value == "testing":
+                return config_dict[section].get(f"test_{key_base}")
+            else:
+                return config_dict[section].get(f"prod_{key_base}")
+
+        # Database
+        database_cfg = {
+            "path": Path(get_env_value("database", "path")),
+            "backup_path": Path(get_env_value("database", "backup_path")),
+            "echo": config_dict["database"].get("echo", "false") == "true"
+        }
+
+        # Paths
+        paths_cfg = {
+            "download_path": Path(get_env_value("paths", "download_path")),
+            "backup_path": Path(get_env_value("paths", "backup_path")),
+            "log_path": Path(get_env_value("paths", "log_path")),
+            "temp_path": Path(get_env_value("paths", "temp_path")),
+            "shared_config_path": Path(get_env_value("paths", "shared_config_path"))
+        }
+
+        # Scraper
+        scraper_cfg = config_dict.get('scraper', {})
+        for key in ['max_retries', 'timeout', 'concurrent_downloads']:
+            if key in scraper_cfg:
+                scraper_cfg[key] = int(scraper_cfg[key])
+        if 'rate_limit_delay' in scraper_cfg:
+            scraper_cfg['rate_limit_delay'] = float(scraper_cfg['rate_limit_delay'])
+
+        # Logging
+        logging_cfg = config_dict.get('logging', {})
+        if 'max_file_size' in logging_cfg:
+            logging_cfg['max_file_size'] = int(logging_cfg['max_file_size'])
+        if 'backup_count' in logging_cfg:
+            logging_cfg['backup_count'] = int(logging_cfg['backup_count'])
+        if 'enable_console' in logging_cfg:
+            logging_cfg['enable_console'] = logging_cfg['enable_console'] == 'true'
+        if 'enable_file' in logging_cfg:
+            logging_cfg['enable_file'] = logging_cfg['enable_file'] == 'true'
+
+        return cls(
+            environment=Environment(env_value),
+            database=DatabaseConfig(**database_cfg),
+            scraper=ScraperConfig(**scraper_cfg),
+            paths=PathConfig(**paths_cfg),
+            logging=LogConfig(**logging_cfg),
+            debug=config_dict.get('environment', {}).get('debug', 'false') == 'true',
+            dry_run=config_dict.get('environment', {}).get('dry_run', 'false') == 'true',
+            user=config_dict.get('user', {}).get('default_user')
+        )
+
+'''

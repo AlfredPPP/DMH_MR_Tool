@@ -1,17 +1,15 @@
-# src/dmh_mr_tool/main.py
-from core.logging import setup_logging
-from config.config_loader import get_config, ConfigLoader
+from config.settings import config_manager, get_config
 
 def main():
-    # Load configuration
+    config_manager.load()
+
     config = get_config()
-
-    log_level = config.get('logging', 'level')
-    setup_logging(
-        level="INFO",
-        log_file="logs/app.log"
-    )
-
+    log_level = config.logging.level
+    # setup_logging(
+    #     level="INFO",
+    #     log_file="logs/app.log"
+    # )
+    print(log_level)
 
 if __name__ == "__main__":
     main()
