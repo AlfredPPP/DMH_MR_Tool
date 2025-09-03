@@ -1,28 +1,28 @@
 # src/dmh_mr_tool/ui/views/spider_view.py
 """Spider interface for web scraping and data collection"""
-
-from datetime import datetime, date
+import sys
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QPushButton, QLabel, QLineEdit, QDateEdit,
-    QTableWidget, QTableWidgetItem, QComboBox,
+    QTableWidget, QTableWidgetItem,
     QProgressBar, QTextEdit, QSplitter,
-    QHeaderView, QMessageBox
+    QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QThread, QTimer, QDate
+from PySide6.QtCore import Qt, Signal, QThread, QDate
 from PySide6.QtGui import QFont
 import structlog
 
-from ...business.services.spider_service import SpiderService
-from ..widgets.data_card import DataCard
+from business.services.spider_service import SpiderService
+
 
 logger = structlog.get_logger()
 
 
 class SpiderWorker(QThread):
-    """Worker thread for spider operations"""
+    """Worker thread for spiders operations"""
 
     # Signals
     progress = Signal(int, str)  # progress percentage, message
@@ -37,7 +37,7 @@ class SpiderWorker(QThread):
         self.spider_service = SpiderService()
 
     def run(self):
-        """Execute spider operation"""
+        """Execute spiders operation"""
         try:
             self.log_message.emit(f"Starting {self.operation}...")
 
@@ -146,7 +146,7 @@ class SpiderView(QWidget):
         self._load_update_times()
 
     def _setup_ui(self):
-        """Set up the spider interface"""
+        """Set up the spiders interface"""
         layout = QVBoxLayout(self)
 
         # Title
@@ -412,3 +412,41 @@ class SpiderView(QWidget):
         self._load_update_times()
         self._populate_db_info()
         self.status_message.emit("Spider view refreshed")
+
+if __name__ == "__main__":
+    import sys
+    from PySide6.QtWidgets import QApplication, QMainWindow
+
+
+    # --- Dummy config objects so SpiderView doesn't crash ---
+    class DummyDBConfig:
+        path = "dummy_db.sqlite"
+        backup_path = "dummy_backup/"
+        pool_size = 5
+
+
+    class DummyConfig:
+        database = DummyDBConfig()
+
+
+    class DummyApp:
+        config_manager = type("DummyConfigManager", (), {"config": DummyConfig()})
+
+
+    class DummyMainWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.app = DummyApp()  # simulate the real app object
+            self.setWindowTitle("SpiderView Test Window")
+            self.setMinimumSize(1000, 700)
+
+
+    # --- Run the app ---
+    app = QApplication(sys.argv)
+    main_window = DummyMainWindow()
+
+    spider_view = SpiderView(parent=main_window)
+    main_window.setCentralWidget(spider_view)
+
+    main_window.show()
+    sys.exit(app.exec())

@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
         """Initialize all application views"""
         view_classes = {
             "home": HomeView,
-            "spider": SpiderView,
+            "spiders": SpiderView,
             "parser": ParserView,
             "mr_update": MRUpdateView,
             "db_browser": DBBrowserView,
@@ -142,7 +142,7 @@ class MainWindow(QMainWindow):
         # Quick navigation shortcuts
         shortcuts = {
             "Ctrl+1": lambda: self.switch_view("home"),
-            "Ctrl+2": lambda: self.switch_view("spider"),
+            "Ctrl+2": lambda: self.switch_view("spiders"),
             "Ctrl+3": lambda: self.switch_view("parser"),
             "Ctrl+4": lambda: self.switch_view("mr_update"),
             "Ctrl+5": lambda: self.switch_view("db_browser"),

@@ -1,17 +1,14 @@
 # src/dmh_mr_tool/main.py
 from core.logging import setup_logging
-from config.settings import config_manager, get_config
+from config.settings import CONFIG
 
 from parsers.base import Foo
 
 
 def main():
-    config_manager.load()
-
-    config = get_config()
     setup_logging(
-        level=config.logging.level,
-        log_file=config.paths.log_path
+        level=CONFIG.logging.level,
+        log_file=CONFIG.paths.log_path
     )
     f = Foo()
     print(f.add('0', 4))

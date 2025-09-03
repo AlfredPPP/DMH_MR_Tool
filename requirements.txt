@@ -1,3 +1,6 @@
 structlog
 requests
 pydantic
+aiohttp
+PySide6
+lxml

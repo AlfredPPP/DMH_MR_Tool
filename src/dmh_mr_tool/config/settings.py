@@ -29,13 +29,13 @@ class DatabaseConfig(BaseModel):
 
     @field_validator('path', 'backup_path')
     def validate_path(cls, v):
-        if not v.parent.exists():
-            raise ValueError(f"Directory {v.parent} does not exist")
+        if not v.exists():
+            raise ValueError(f"Directory {v} does not exist")
         return v
 
 
-class ScraperConfig(BaseModel):
-    """Web scraper configuration"""
+class SpiderConfig(BaseModel):
+    """Web spider configuration"""
     asx_base_url: str = "https://www.asx.com.au"
     asx_announcement_url: str = "/markets/trade-our-cash-market/todays-announcements"
     betashares_base_url: str = "https://www.betashares.com.au"
@@ -45,6 +45,13 @@ class ScraperConfig(BaseModel):
     timeout: int = Field(default=30, ge=5, le=120)
     rate_limit_delay: float = Field(default=1.0, ge=0.1, le=10.0)
     concurrent_downloads: int = Field(default=3, ge=1, le=10)
+
+
+class DMHConfig(BaseModel):
+    """DMH System configuration"""
+    login_url: str
+    post_url: str
+    concurrent_limit: int = Field(default=5, ge=1, le=10)
 
 
 class PathConfig(BaseModel):
@@ -76,9 +83,10 @@ class AppConfig:
     """Main application configuration"""
     environment: Environment = Environment.TESTING
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
-    scraper: ScraperConfig = field(default_factory=ScraperConfig)
+    spider: SpiderConfig = field(default_factory=SpiderConfig)
     paths: PathConfig = field(default_factory=PathConfig)
     logging: LogConfig = field(default_factory=LogConfig)
+    dmh: DMHConfig = field(default_factory=DMHConfig)
 
     # Runtime settings
     user: Optional[str] = None
@@ -128,13 +136,21 @@ class AppConfig:
             "temp_path": Path(get_env_value("paths", "temp_path"))
         }
 
-        # Scraper
-        scraper_cfg = config_dict.get('scraper', {})
+        # Spider
+        spider_cfg = config_dict.get('spider', {})
         for key in ['max_retries', 'timeout', 'concurrent_downloads']:
-            if key in scraper_cfg:
-                scraper_cfg[key] = int(scraper_cfg[key])
-        if 'rate_limit_delay' in scraper_cfg:
-            scraper_cfg['rate_limit_delay'] = float(scraper_cfg['rate_limit_delay'])
+            if key in spider_cfg:
+                spider_cfg[key] = int(spider_cfg[key])
+        if 'rate_limit_delay' in spider_cfg:
+            spider_cfg['rate_limit_delay'] = float(spider_cfg['rate_limit_delay'])
+
+        # DMH
+        dmh_cfg = {
+            "login_url": get_env_value("dmh", "login_url"),
+            "post_url": get_env_value("dmh", "post_url")
+        }
+        if "concurrent_limit" in config_dict["dmh"]:
+            dmh_cfg["concurrent_limit"] = int(config_dict["dmh"].get("concurrent_limit"))
 
         # Logging
         logging_cfg = config_dict.get('logging', {})
@@ -150,7 +166,8 @@ class AppConfig:
         return cls(
             environment=Environment(env_value),
             database=DatabaseConfig(**database_cfg),
-            scraper=ScraperConfig(**scraper_cfg),
+            spider=SpiderConfig(**spider_cfg),
+            dmh = DMHConfig(**dmh_cfg),
             paths=PathConfig(**paths_cfg),
             logging=LogConfig(**logging_cfg),
             user=config_dict.get('user', {}).get('default_user')
@@ -194,4 +211,4 @@ class ConfigManager:
 
 # Global config instance
 config_manager = ConfigManager()
-get_config = lambda: config_manager.config
+CONFIG = config_manager.load()

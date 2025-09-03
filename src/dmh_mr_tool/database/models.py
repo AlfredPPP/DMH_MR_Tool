@@ -32,7 +32,10 @@ class AsxInfo(Base):
     asx_code = Column(String(10), nullable=False)
     title = Column(Text, nullable=False)
     pub_date = Column(Date, nullable=False)
-    pdf_url = Column(Text, nullable=False)
+    pdf_mask_url = Column(Text)
+    pdf_url = Column(Text)
+    page_num = Column(Integer, nullable=False)
+    file_size = Column(Text, nullable=False)
     downloaded = Column(Integer, default=DownloadStatus.NOT_DOWNLOADED)
     update_timestamp = Column(DateTime, default=func.now(), onupdate=func.now())
     update_user = Column(String(100), nullable=False)
@@ -98,9 +101,11 @@ class VanguardData(Base):
     cpu = Column(String(50))
     update_timestamp = Column(DateTime, default=func.now())
 
-    # Component columns (dynamically added based on requirements)
+    # Component columns (dynamically added based on requirements, usually it is more than 100)
     CGCL = Column(Float)
     CGDW = Column(Float)
+    ZIDU = Column(Float)
+    FIIN = Column(Float)
     INC = Column(Float)
     # Add other component columns as needed
 
