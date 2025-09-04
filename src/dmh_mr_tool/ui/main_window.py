@@ -1,248 +1,142 @@
 # src/dmh_mr_tool/ui/main_window.py
 """Main window controller with navigation"""
 
-from typing import Dict, Optional
-
-from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QPushButton, QLabel, QFrame,
-    QMessageBox, QStatusBar
-)
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+import asyncio
+import os
+import sys
 import structlog
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QApplication
 
-from .views.home_view import HomeView
-from .views.spider_view import SpiderView
-from .views.parser_view import ParserView
-from .views.mr_update_view import MRUpdateView
-from .views.db_browser_view import DBBrowserView
-from .views.settings_view import SettingsView
-from .widgets.navigation import NavigationPanel
+from qfluentwidgets import FluentWindow, SystemThemeListener, isDarkTheme, NavigationItemPosition, \
+    NavigationAvatarWidget
+from qfluentwidgets import FluentIcon as FIF
+
+from qasync import QEventLoop
+
+from core.utils import USERNAME
+from ui.views.home_view import HomeInterface
+from ui.views.db_browser_view import DBBrowserInterface
+from ui.views.settings_view import SettingsInterface
+from ui.views.spider_view import SpiderInterface
+from ui.views.manual_view import ManualInterface
+from ui.views.mr_update_view import MrUpdateInterface
+from ui.views.parser_view import ParserInterface
+from ui.views.login_view import LoginInterface
+from ui.resource import resource
+from ui.utils.config import cfg
+from ui.utils.infobar import createErrorInfoBar, createSuccessInfoBar, createWarningInfoBar
+from ui.utils.signal_bus import signalBus
+from business.services.dmh_service import DMH
 
 logger = structlog.get_logger()
 
 
-class MainWindow(QMainWindow):
-    """Main application window with navigation and view management"""
-
-    # Signals
-    view_changed = Signal(str)
-
-    def __init__(self, app):
+class MainWindow(FluentWindow):
+    def __init__(self):
         super().__init__()
-        self.app = app
-        self.views: Dict[str, QWidget] = {}
-        self.current_view: Optional[str] = None
+        self.initWindow()
 
-        self._setup_ui()
-        self._setup_menu()
-        self._setup_shortcuts()
-        self._setup_status_bar()
+        # init services
+        self.dmh = DMH()
 
-        # Show home view by default
-        self.switch_view("home")
+        # create system theme listener
+        self.themeListener = SystemThemeListener(self)
 
-    def _setup_ui(self):
-        """Set up the main UI layout"""
-        self.setWindowTitle("DMH Master Rate Tool")
-        self.setMinimumSize(1200, 800)
+        # create sub interfaces
+        self.homeInterface = HomeInterface(self)
+        self.dbBrowserInterface = DBBrowserInterface(self)
+        self.settingsInterface = SettingsInterface(self)
+        self.spiderInterface = SpiderInterface(self)
+        self.manualInterface = ManualInterface(self)
+        self.mrUpdateInterface = MrUpdateInterface(self)
+        self.parserInterface = ParserInterface(self)
+        self.loginInterface = LoginInterface(self)
 
-        # Central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # enable acrylic effect
+        self.navigationInterface.setAcrylicEnabled(True)
 
-        # Main layout
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        # add items to navigation
+        self.initNavigation()
 
-        # Navigation panel
-        self.nav_panel = NavigationPanel()
-        self.nav_panel.view_selected.connect(self.switch_view)
-        main_layout.addWidget(self.nav_panel)
+        # start theme listener
+        self.themeListener.start()
 
-        # Content area
-        content_frame = QFrame()
-        content_frame.setFrameStyle(QFrame.StyledPanel)
-        content_layout = QVBoxLayout(content_frame)
+        self.connectSignalToSlot()
 
-        # View stack
-        self.view_stack = QStackedWidget()
-        content_layout.addWidget(self.view_stack)
+    def connectSignalToSlot(self):
+        signalBus.infoBarSignal.connect(self.show_session_infoBar)
 
-        # Initialize views
-        self._init_views()
+    def initNavigation(self):
+        # add navigation items
+        self.addSubInterface(self.homeInterface, FIF.HOME, 'Home')
+        self.navigationInterface.addSeparator()
 
-        main_layout.addWidget(content_frame, 1)
+        pos = NavigationItemPosition.SCROLL
+        self.addSubInterface(self.spiderInterface, FIF.ROBOT, 'Spider', pos)
+        self.addSubInterface(self.parserInterface, FIF.SYNC, 'Parser', pos)
+        self.addSubInterface(self.manualInterface, FIF.CLOUD, 'Manual', NavigationItemPosition.BOTTOM)
+        self.addSubInterface(self.dbBrowserInterface, FIF.DOCUMENT, 'DB Browser', NavigationItemPosition.BOTTOM)
 
-    def _init_views(self):
-        """Initialize all application views"""
-        view_classes = {
-            "home": HomeView,
-            "spiders": SpiderView,
-            "parser": ParserView,
-            "mr_update": MRUpdateView,
-            "db_browser": DBBrowserView,
-            "settings": SettingsView
-        }
-
-        for name, view_class in view_classes.items():
-            view = view_class(self)
-            self.views[name] = view
-            self.view_stack.addWidget(view)
-
-            # Connect view signals if needed
-            if hasattr(view, 'status_message'):
-                view.status_message.connect(self.show_status_message)
-
-    def _setup_menu(self):
-        """Set up application menu bar"""
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("&File")
-
-        backup_action = QAction("&Backup Database", self)
-        backup_action.triggered.connect(self.backup_database)
-        file_menu.addAction(backup_action)
-
-        file_menu.addSeparator()
-
-        exit_action = QAction("E&xit", self)
-        exit_action.setShortcut(QKeySequence.Quit)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # View menu
-        view_menu = menubar.addMenu("&View")
-
-        for name, view in self.views.items():
-            action = QAction(f"&{name.replace('_', ' ').title()}", self)
-            action.triggered.connect(lambda checked, n=name: self.switch_view(n))
-            view_menu.addAction(action)
-
-        # Tools menu
-        tools_menu = menubar.addMenu("&Tools")
-
-        refresh_action = QAction("&Refresh Data", self)
-        refresh_action.setShortcut(QKeySequence.Refresh)
-        refresh_action.triggered.connect(self.refresh_current_view)
-        tools_menu.addAction(refresh_action)
-
-        # Help menu
-        help_menu = menubar.addMenu("&Help")
-
-        about_action = QAction("&About", self)
-        about_action.triggered.connect(self.show_about)
-        help_menu.addAction(about_action)
-
-    def _setup_shortcuts(self):
-        """Set up keyboard shortcuts"""
-        # Quick navigation shortcuts
-        shortcuts = {
-            "Ctrl+1": lambda: self.switch_view("home"),
-            "Ctrl+2": lambda: self.switch_view("spiders"),
-            "Ctrl+3": lambda: self.switch_view("parser"),
-            "Ctrl+4": lambda: self.switch_view("mr_update"),
-            "Ctrl+5": lambda: self.switch_view("db_browser"),
-            "Ctrl+6": lambda: self.switch_view("settings"),
-        }
-
-        for key, func in shortcuts.items():
-            action = QAction(self)
-            action.setShortcut(QKeySequence(key))
-            action.triggered.connect(func)
-            self.addAction(action)
-
-    def _setup_status_bar(self):
-        """Set up status bar with permanent widgets"""
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-
-        # User label
-        self.user_label = QLabel(f"User: {self.app.config_manager.config.user or 'Unknown'}")
-        self.status_bar.addPermanentWidget(self.user_label)
-
-        # Environment label
-        env = self.app.config_manager.config.environment
-        self.env_label = QLabel(f"Environment: {env}")
-        self.status_bar.addPermanentWidget(self.env_label)
-
-        # Connection status
-        self.connection_label = QLabel("● Connected")
-        self.connection_label.setStyleSheet("color: green;")
-        self.status_bar.addPermanentWidget(self.connection_label)
-
-    def switch_view(self, view_name: str):
-        """Switch to a different view"""
-        if view_name not in self.views:
-            logger.error(f"Unknown view: {view_name}")
-            return
-
-        self.current_view = view_name
-        view = self.views[view_name]
-        self.view_stack.setCurrentWidget(view)
-
-        # Update navigation
-        self.nav_panel.set_active(view_name)
-
-        # Emit signal
-        self.view_changed.emit(view_name)
-
-        logger.info(f"Switched to view: {view_name}")
-        self.show_status_message(f"Switched to {view_name.replace('_', ' ').title()}")
-
-    def refresh_current_view(self):
-        """Refresh the current view"""
-        if self.current_view and self.current_view in self.views:
-            view = self.views[self.current_view]
-            if hasattr(view, 'refresh'):
-                view.refresh()
-                self.show_status_message(f"Refreshed {self.current_view}")
-
-    def show_status_message(self, message: str, timeout: int = 3000):
-        """Show a temporary status message"""
-        self.status_bar.showMessage(message, timeout)
-
-    def backup_database(self):
-        """Trigger database backup"""
-        try:
-            backup_path = self.app.db_manager.backup()
-            QMessageBox.information(
-                self,
-                "Backup Complete",
-                f"Database backed up to:\n{backup_path}"
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Backup Failed",
-                f"Failed to backup database:\n{str(e)}"
-            )
-
-    def show_about(self):
-        """Show about dialog"""
-        QMessageBox.about(
-            self,
-            "About DMH MR Tool",
-            "DMH Master Rate Tool v1.0.0\n\n"
-            "Financial market data processing automation tool\n"
-            "for Australian market data.\n\n"
-            "© 2025 Your Company"
+        # add custom widget to bottom
+        avatar = NavigationAvatarWidget(USERNAME)
+        self.navigationInterface.addWidget(
+            routeKey='avatar',
+            widget=avatar,
+            tooltip=os.getlogin(),
+            onClick=lambda: self.loginInterface.showLoginWindow(avatar),
+            position=NavigationItemPosition.BOTTOM
         )
+        self.addSubInterface(self.settingsInterface, FIF.SETTING, 'Settings', NavigationItemPosition.BOTTOM)
 
-    def closeEvent(self, event):
-        """Handle window close event"""
-        reply = QMessageBox.question(
-            self,
-            "Confirm Exit",
-            "Are you sure you want to exit?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+    def initWindow(self):
+        self.resize(760, 617)
+        self.setWindowTitle("MR Maintenance Tool")
+        self.setMinimumWidth(760)
 
-        if reply == QMessageBox.Yes:
-            event.accept()
-        else:
-            event.ignore()
+        self.setMicaEffectEnabled(cfg.get(cfg.micaEnabled))
+
+        desktop = QApplication.screens()[0].availableGeometry()
+        w, h = desktop.width(), desktop.height()
+        self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
+        self.show()
+        QApplication.processEvents()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, 'splashScreen'):
+            self.splashScreen.resize(self.size())
+
+    def closeEvent(self, e):
+        self.themeListener.terminate()
+        self.themeListener.deleteLater()
+        super().closeEvent(e)
+
+    def _onThemeChangedFinished(self):
+        super()._onThemeChangedFinished()
+        # retry
+        if self.isMicaEffectEnabled():
+            QTimer.singleShot(100, lambda: self.windowEffect.setMicaEffect(self.winId(), isDarkTheme()))
+
+    def show_session_infoBar(self, info_type: str, title: str, message: str):
+        if info_type == "SUCCESS":
+            createSuccessInfoBar(self, title, message)
+        elif info_type == "WARNING":
+            createWarningInfoBar(self, title, message)
+        elif info_type == "ERROR":
+            createErrorInfoBar(self, title, message)
+
+def run():
+    logger.info(f'Program start! User: {USERNAME}')
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
+    app = QApplication(sys.argv)
+    loop = QEventLoop(app)
+    asyncio.set_event_loop(loop)
+    window = MainWindow()
+    window.show()
+    with loop:
+        loop.run_forever()
+
+if __name__ == "__main__":
+    run()

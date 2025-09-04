@@ -1,7 +1,6 @@
 import asyncio
 import sys
 
-from Demos.EvtSubscribe_pull import query_text
 from PySide6.QtCore import Qt
 from PySide6.QtSql import QSqlQueryModel, QSqlDatabase
 from PySide6.QtWidgets import QSplitter, QHeaderView, QVBoxLayout

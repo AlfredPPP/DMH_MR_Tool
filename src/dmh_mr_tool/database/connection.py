@@ -12,8 +12,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 import structlog
 
-from ..config.settings import DatabaseConfig
-from ..core.logging import log_execution
+from config.settings import DatabaseConfig
+from core.logging import log_execution
 from .models import Base
 
 logger = structlog.get_logger()

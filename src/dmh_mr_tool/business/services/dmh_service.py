@@ -15,7 +15,7 @@ CONCURRENCY = CONFIG.dmh.concurrent_limit
 
 class DMH(QObject):
     def __init__(self):
-        super.__init__()
+        super().__init__()
         self.session = self.create_session()
         self.infoBarSignal = signalBus.infoBarSignal
 

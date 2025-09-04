@@ -1,0 +1,46 @@
+BaseInterface,
+PageHead,
+#view {
+    background-color: transparent;
+}
+
+QScrollArea {
+    border: none;
+}
+
+
+PageHead>StrongBodyLabel {
+    color: white;
+}
+
+PageHead>CaptionLabel {
+    color: rgb(95,95,95);
+}
+
+TitleLabel,
+StrongBodyLabel {
+    color: white;
+}
+
+PageBody>#body {
+    border: 1px solid rgb(36, 36, 36);
+    border-radius: 10px;
+    background-color: rgba(0, 0, 0, 0.1795);
+}
+
+PageBody>#body QLabel {
+    font: 14px 'Segoe UI', 'Microsoft YaHei', 'Arial';
+    color: white;
+}
+
+PageBody>#body InfoBadge {
+    font-size: 11px;
+}
+
+
+#sourceWidget {
+    background-color: rgba(255, 255, 255, 0.09);
+    border-top: 1px solid rgb(36, 36, 36);
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
