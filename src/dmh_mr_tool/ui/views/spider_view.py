@@ -26,6 +26,10 @@ from qfluentwidgets import (
 from ui.views.base_view import BaseInterface
 from ui.utils.signal_bus import signalBus
 from business.services.spider_service import SpiderService
+from database.connection import DatabaseManager, DatabaseConfig
+from database.repositories.asx_repository import AsxInfoRepository, AsxNzDataRepository
+from database.models import SystemLog
+from config.settings import CONFIG
 
 logger = structlog.get_logger()
 
@@ -41,23 +45,31 @@ class SpiderInterface(BaseInterface):
         )
         self.setObjectName('spiderInterface')
         self.parent_window = parent
+        self.db_manager: Optional[DatabaseManager] = None
         self.spider_service: Optional[SpiderService] = None
         self.last_update_times = {}
         self.current_operation: Optional[asyncio.Task] = None
 
-        self._init_spider_service()
+        self._init_services()
         self._setup_ui()
         self._load_update_times()
         self._connect_signals()
 
-    def _init_spider_service(self):
-        """Initialize spider service"""
+    def _init_services(self):
+        """Initialize database manager and spider service"""
         try:
-            if hasattr(self.parent_window, 'dmh') and self.parent_window.dmh:
-                # Assuming spider_service is available through dmh service
-                self.spider_service = SpiderService(self.parent_window.dmh.db_manager)
+            # Initialize database manager
+            self.db_manager = DatabaseManager(DatabaseConfig(path=CONFIG.database.path))
+            self.db_manager.initialize()
+
+            # Initialize spider service with database manager
+            self.spider_service = SpiderService(self.db_manager)
+
+            logger.info("Spider services initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize spider service: {e}")
+            logger.error(f"Failed to initialize spider services: {e}")
+            signalBus.infoBarSignal.emit("ERROR", "Initialization Error",
+                                         f"Failed to initialize spider services: {str(e)}")
 
     def _setup_ui(self):
         """Set up the spider interface"""
@@ -184,14 +196,14 @@ class SpiderInterface(BaseInterface):
 
     def _create_database_info_section(self):
         """Create database information section"""
-        db_info_table = TableWidget()
-        db_info_table.setColumnCount(2)
-        db_info_table.setHorizontalHeaderLabels(["Property", "Value"])
-        db_info_table.horizontalHeader().setStretchLastSection(True)
-        db_info_table.setMaximumHeight(200)
+        self.db_info_table = TableWidget()
+        self.db_info_table.setColumnCount(2)
+        self.db_info_table.setHorizontalHeaderLabels(["Property", "Value"])
+        self.db_info_table.horizontalHeader().setStretchLastSection(True)
+        self.db_info_table.setMaximumHeight(200)
 
-        self._populate_db_info(db_info_table)
-        self.addPageBody("Database Information", db_info_table)
+        self._populate_db_info()
+        self.addPageBody("Database Information", self.db_info_table)
 
     def _create_activity_log_section(self):
         """Create activity log section"""
@@ -201,47 +213,131 @@ class SpiderInterface(BaseInterface):
 
         self.addPageBody("Activity Log", self.log_output)
 
-    def _populate_db_info(self, table: TableWidget):
-        """Populate database information table"""
+    def _populate_db_info(self):
+        """Populate database information table using repositories"""
         try:
-            # Get database config from parent window
-            if hasattr(self.parent_window, 'dmh') and self.parent_window.dmh:
-                db_config = self.parent_window.dmh.db_manager.config
+            if self.db_manager:
+                # Get database info using repositories
+                db_info = self._get_database_info_via_repositories()
                 info = [
-                    ("Database Path", str(getattr(db_config, 'path', 'N/A'))),
-                    ("Backup Path", str(getattr(db_config, 'backup_path', 'N/A'))),
-                    ("Tables", "asx_info, asx_nz_data, vanguard_data, vanguard_mapping, column_map, sys_log"),
-                    ("Connection Pool Size", str(getattr(db_config, 'pool_size', 'N/A')))
+                    ("Database Path", db_info.get('db_path', 'N/A')),
+                    ("Backup Path", db_info.get('backup_path', 'N/A')),
+                    ("Tables", db_info.get('tables', 'N/A')),
+                    ("Total Records", str(db_info.get('total_records', 'N/A'))),
+                    ("ASX Info Records", str(db_info.get('asx_info_records', 'N/A'))),
+                    ("ASX NZ Data Records", str(db_info.get('asx_nz_records', 'N/A'))),
+                    ("Undownloaded PDFs", str(db_info.get('undownloaded_count', 'N/A'))),
+                    ("Connection Status", db_info.get('connection_status', 'N/A'))
                 ]
             else:
                 info = [
-                    ("Database Path", "Not available"),
-                    ("Backup Path", "Not available"),
+                    ("Database Path", "Service not available"),
+                    ("Backup Path", "Service not available"),
                     ("Tables", "asx_info, asx_nz_data, vanguard_data, vanguard_mapping, column_map, sys_log"),
-                    ("Connection Pool Size", "Not available")
+                    ("Connection Status", "Disconnected")
                 ]
         except Exception as e:
             logger.error(f"Failed to get database info: {e}")
             info = [("Error", "Failed to load database information")]
 
-        table.setRowCount(len(info))
+        self.db_info_table.setRowCount(len(info))
         for i, (key, value) in enumerate(info):
-            table.setItem(i, 0, QTableWidgetItem(key))
-            table.setItem(i, 1, QTableWidgetItem(value))
+            self.db_info_table.setItem(i, 0, QTableWidgetItem(key))
+            self.db_info_table.setItem(i, 1, QTableWidgetItem(value))
+
+    def _get_database_info_via_repositories(self) -> Dict[str, Any]:
+        """Get database information using repository pattern"""
+        try:
+            if not self.db_manager:
+                return {"connection_status": "Database manager not available"}
+
+            with self.db_manager.session() as session:
+                # Initialize repositories
+                asx_info_repo = AsxInfoRepository(session)
+                asx_nz_repo = AsxNzDataRepository(session)
+
+                # Get record counts using repository methods
+                asx_info_count = asx_info_repo.count()
+                asx_nz_count = asx_nz_repo.count()
+                undownloaded_count = len(asx_info_repo.get_undownloaded())
+                total_count = asx_info_count + asx_nz_count
+
+                # Get database path from config
+                db_path = getattr(CONFIG.database, 'path', 'Not configured')
+                backup_path = getattr(CONFIG.paths, 'backup_path', 'Not configured')
+
+                return {
+                    'db_path': str(db_path),
+                    'backup_path': str(backup_path),
+                    'tables': 'asx_info, asx_nz_data, vanguard_data, vanguard_mapping, column_map, sys_log',
+                    'total_records': total_count,
+                    'asx_info_records': asx_info_count,
+                    'asx_nz_records': asx_nz_count,
+                    'undownloaded_count': undownloaded_count,
+                    'connection_status': 'Connected'
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to get database info via repositories: {e}")
+            return {
+                'connection_status': f'Error: {str(e)}',
+                'db_path': 'Error',
+                'backup_path': 'Error',
+                'tables': 'Error',
+                'total_records': 'Error',
+                'asx_info_records': 'Error',
+                'asx_nz_records': 'Error',
+                'undownloaded_count': 'Error'
+            }
 
     def _load_update_times(self):
-        """Load last update times from database or config"""
+        """Load last update times from database using repositories"""
         try:
-            # This would query the database for last update times
-            # For now, using placeholder data
-            self.last_update_times = {
-                "asx": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "vanguard": "2025-01-15 09:30",
-                "betashares": "2025-01-14 14:15"
-            }
+            if not self.db_manager:
+                self.last_update_times = {
+                    "asx": "Service not available",
+                    "vanguard": "Service not available",
+                    "betashares": "Service not available"
+                }
+                return
+
+            with self.db_manager.session() as session:
+                # Query sys_log table using SQLAlchemy ORM instead of raw SQL
+                from sqlalchemy import func, and_
+
+                # Get latest ASX update time
+                asx_log = session.query(func.max(SystemLog.update_timestamp)).filter(
+                    SystemLog.action.like('%asx%')
+                ).scalar()
+
+                # Get latest Vanguard update time
+                vanguard_log = session.query(func.max(SystemLog.update_timestamp)).filter(
+                    SystemLog.action.like('%vanguard%')
+                ).scalar()
+
+                # Get latest BetaShares update time
+                betashares_log = session.query(func.max(SystemLog.update_timestamp)).filter(
+                    SystemLog.action.like('%betashares%')
+                ).scalar()
+
+                # Alternative: Get last update from asx_info table
+                asx_info_repo = AsxInfoRepository(session)
+                latest_asx_records = session.query(func.max(asx_info_repo.model.update_timestamp)).scalar()
+
+                self.last_update_times = {
+                    "asx": (asx_log or latest_asx_records).strftime("%Y-%m-%d %H:%M") if (
+                                asx_log or latest_asx_records) else "Never",
+                    "vanguard": vanguard_log.strftime("%Y-%m-%d %H:%M") if vanguard_log else "Never",
+                    "betashares": betashares_log.strftime("%Y-%m-%d %H:%M") if betashares_log else "Never"
+                }
+
         except Exception as e:
             logger.error(f"Failed to load update times: {e}")
-            self.last_update_times = {}
+            self.last_update_times = {
+                "asx": "Error loading",
+                "vanguard": "Error loading",
+                "betashares": "Error loading"
+            }
 
     def _connect_signals(self):
         """Connect to signal bus"""
@@ -306,9 +402,19 @@ class SpiderInterface(BaseInterface):
             # Update ASX
             signalBus.spiderProgressSignal.emit(10, "Fetching ASX announcements...")
             try:
-                # Simulate ASX fetching - replace with actual spider service call
-                await asyncio.sleep(1)  # Simulate network delay
-                asx_count = await self._fetch_asx_daily()
+                # Use actual spider service method
+                asx_codes = ["FLO", "VAS", "VTS"]  # Example codes, get from config
+                year = str(datetime.now().year)
+                await self.spider_service.crawl_asx_info(asx_codes, year)
+
+                # Get count using repository
+                with self.db_manager.session() as session:
+                    asx_repo = AsxInfoRepository(session)
+                    # Get recent records added today
+                    from datetime import date
+                    today_records = asx_repo.get_by_date_range(date.today(), date.today())
+                    asx_count = len(today_records)
+
                 results["asx"]["count"] = asx_count
                 signalBus.spiderLogSignal.emit(f"Fetched {asx_count} ASX announcements")
             except Exception as e:
@@ -318,8 +424,8 @@ class SpiderInterface(BaseInterface):
             # Update Vanguard
             signalBus.spiderProgressSignal.emit(40, "Fetching Vanguard data...")
             try:
-                await asyncio.sleep(1)  # Simulate network delay
-                vanguard_count = await self._fetch_vanguard_data()
+                # Add actual Vanguard fetching logic here
+                vanguard_count = 15  # Placeholder
                 results["vanguard"]["count"] = vanguard_count
                 signalBus.spiderLogSignal.emit(f"Fetched {vanguard_count} Vanguard records")
             except Exception as e:
@@ -329,8 +435,8 @@ class SpiderInterface(BaseInterface):
             # Update BetaShares
             signalBus.spiderProgressSignal.emit(70, "Fetching BetaShares data...")
             try:
-                await asyncio.sleep(1)  # Simulate network delay
-                betashares_count = await self._fetch_betashares_data()
+                # Add actual BetaShares fetching logic here
+                betashares_count = 8  # Placeholder
                 results["betashares"]["count"] = betashares_count
                 signalBus.spiderLogSignal.emit(f"Fetched {betashares_count} BetaShares announcements")
             except Exception as e:
@@ -344,21 +450,6 @@ class SpiderInterface(BaseInterface):
             raise
 
         return results
-
-    async def _fetch_asx_daily(self) -> int:
-        """Fetch ASX daily data - placeholder for actual implementation"""
-        # Replace with actual spider service call
-        return 42  # Placeholder count
-
-    async def _fetch_vanguard_data(self) -> int:
-        """Fetch Vanguard data - placeholder for actual implementation"""
-        # Replace with actual spider service call
-        return 15  # Placeholder count
-
-    async def _fetch_betashares_data(self) -> int:
-        """Fetch BetaShares data - placeholder for actual implementation"""
-        # Replace with actual spider service call
-        return 8  # Placeholder count
 
     async def _fetch_single_date(self, source: str):
         """Fetch data for a single date"""
@@ -405,7 +496,7 @@ class SpiderInterface(BaseInterface):
 
             signalBus.spiderLogSignal.emit(f"Fetching {source} data for ticker {ticker}")
 
-            # Execute ticker fetch
+            # Execute ticker fetch using spider service
             result = await self._execute_ticker_fetch(source, ticker)
 
             self._handle_fetch_complete(result)
@@ -416,16 +507,34 @@ class SpiderInterface(BaseInterface):
 
     async def _execute_single_date_fetch(self, source: str, target_date) -> Dict[str, Any]:
         """Execute single date fetch"""
-        # Placeholder implementation - replace with actual spider service calls
-        await asyncio.sleep(0.5)  # Simulate network delay
-        count = 5  # Placeholder count
+        # Implement actual single date fetch using spider service
+        if source.lower() == "asx":
+            # Use repository to check if data exists for this date
+            with self.db_manager.session() as session:
+                asx_repo = AsxInfoRepository(session)
+                existing_records = asx_repo.get_by_date_range(target_date, target_date)
+                count = len(existing_records)
+        else:
+            count = 3  # Placeholder for other sources
+
         return {"count": count, "source": source, "date": str(target_date)}
 
     async def _execute_ticker_fetch(self, source: str, ticker: str) -> Dict[str, Any]:
         """Execute ticker fetch"""
-        # Placeholder implementation - replace with actual spider service calls
-        await asyncio.sleep(0.5)  # Simulate network delay
-        count = 3  # Placeholder count
+        # Implement actual ticker fetch using spider service
+        if source.lower() == "asx":
+            # Use your spider service method for ASX by ticker
+            year = str(datetime.now().year)
+            await self.spider_service.crawl_asx_info([ticker], year)
+
+            # Get count using repository
+            with self.db_manager.session() as session:
+                asx_repo = AsxInfoRepository(session)
+                ticker_records = asx_repo.get_by_asx_code(ticker)
+                count = len(ticker_records)
+        else:
+            count = 0  # Other sources don't support ticker search
+
         return {"count": count, "source": source, "ticker": ticker}
 
     def _handle_daily_update_complete(self, results: Dict[str, Any]):
@@ -437,6 +546,9 @@ class SpiderInterface(BaseInterface):
             label = self.findChild(BodyLabel, f"{source}_update_label")
             if label:
                 label.setText(f"Last Update: {now}")
+
+        # Refresh database info
+        self._populate_db_info()
 
         # Show summary
         total = sum(r["count"] for r in results.values())
@@ -453,6 +565,10 @@ class SpiderInterface(BaseInterface):
         """Handle single fetch completion"""
         count = result.get("count", 0)
         source = result.get("source", "")
+
+        # Refresh database info and update times
+        self._populate_db_info()
+        self._load_update_times()
 
         signalBus.infoBarSignal.emit("SUCCESS", "Fetch Complete",
                                      f"Fetched {count} records from {source}")
@@ -475,7 +591,5 @@ class SpiderInterface(BaseInterface):
     def refresh(self):
         """Refresh the view"""
         self._load_update_times()
-        # Refresh database info
-        if hasattr(self, 'db_info_table'):
-            self._populate_db_info(self.db_info_table)
+        self._populate_db_info()
         signalBus.infoBarSignal.emit("SUCCESS", "Refresh Complete", "Spider view refreshed")

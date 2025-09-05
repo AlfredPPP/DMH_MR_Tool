@@ -18,7 +18,7 @@ MAX_RETRIES = 3
 
 class AsxSpider:
     def __init__(self):
-        self.semaphore = Semaphore(CONFIG.scraper.concurrent_downloads)
+        self.semaphore = Semaphore(CONFIG.spider.concurrent_downloads)
 
     async def fetch_announcements_by_code(self, asx_code: str, year: str) -> list[dict]:
         params = {

@@ -23,12 +23,13 @@ class Environment(str, Enum):
 class DatabaseConfig(BaseModel):
     """Database configuration"""
     path: Path
-    backup_path: Path
-    pool_size: int = Field(default=5, ge=1, le=20)
+    backup_path: Optional[Path] = None
     echo: bool = False
 
     @field_validator('path', 'backup_path')
     def validate_path(cls, v):
+        if v is None:
+            return v
         if not v.exists():
             raise ValueError(f"Directory {v} does not exist")
         return v

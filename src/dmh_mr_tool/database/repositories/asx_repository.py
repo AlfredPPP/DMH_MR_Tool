@@ -1,10 +1,10 @@
-# src/dmh_mr_tool/database/repositories/asx_repository.py
-"""Repository for ASX data operations"""
+# Addition to src/dmh_mr_tool/database/repositories/asx_repository.py
+"""Repository for ASX data operations - Enhanced version"""
 
 from datetime import date, datetime
 from typing import List, Optional
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 from sqlalchemy.orm import Session
 
 from ..models import AsxInfo, AsxNzData, DownloadStatus
@@ -32,6 +32,15 @@ class AsxInfoRepository(BaseRepository[AsxInfo]):
 
         return query.order_by(AsxInfo.pub_date.desc()).all()
 
+    def get_by_date_range(self, start_date: date, end_date: date) -> List[AsxInfo]:
+        """Get announcements within date range"""
+        return self.session.query(AsxInfo).filter(
+            and_(
+                AsxInfo.pub_date >= start_date,
+                AsxInfo.pub_date <= end_date
+            )
+        ).order_by(AsxInfo.pub_date.desc()).all()
+
     def get_undownloaded(self, limit: int = None) -> List[AsxInfo]:
         """Get announcements that haven't been downloaded"""
         query = self.session.query(AsxInfo).filter(
@@ -42,6 +51,10 @@ class AsxInfoRepository(BaseRepository[AsxInfo]):
             query = query.limit(limit)
 
         return query.all()
+
+    def count(self) -> int:
+        """Get total count of ASX info records"""
+        return self.session.query(func.count(AsxInfo.id)).scalar()
 
     def mark_downloaded(self, id: int, status: DownloadStatus = DownloadStatus.DOWNLOADED) -> bool:
         """Mark announcement as downloaded"""
@@ -92,3 +105,7 @@ class AsxNzDataRepository(BaseRepository[AsxNzData]):
         ).filter(
             AsxInfo.update_timestamp >= cutoff_date
         ).all()
+
+    def count(self) -> int:
+        """Get total count of ASX NZ data records"""
+        return self.session.query(func.count(AsxNzData.id)).scalar()
