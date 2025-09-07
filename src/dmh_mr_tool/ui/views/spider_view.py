@@ -201,6 +201,7 @@ class SpiderInterface(BaseInterface):
         self.db_info_table.setHorizontalHeaderLabels(["Property", "Value"])
         self.db_info_table.horizontalHeader().setStretchLastSection(True)
         self.db_info_table.setMaximumHeight(200)
+        self.db_info_table.setMinimumWidth(600)
 
         self._populate_db_info()
         self.addPageBody("Database Information", self.db_info_table)
@@ -244,6 +245,9 @@ class SpiderInterface(BaseInterface):
         for i, (key, value) in enumerate(info):
             self.db_info_table.setItem(i, 0, QTableWidgetItem(key))
             self.db_info_table.setItem(i, 1, QTableWidgetItem(value))
+
+        for col in range(0, self.db_info_table.colorCount()):
+            self.db_info_table.resizeColumnToContents(col)
 
     def _get_database_info_via_repositories(self) -> Dict[str, Any]:
         """Get database information using repository pattern"""

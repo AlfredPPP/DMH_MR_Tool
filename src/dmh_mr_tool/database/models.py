@@ -21,7 +21,13 @@ class DownloadStatus(IntEnum):
     NOT_DOWNLOADED = 0
     DOWNLOADED = 1
     FAILED = 2
-    IN_PROGRESS = 3
+
+class ParseStatus(IntEnum):
+    """Parse status enumeration"""
+    NOT_PARSED = 0
+    PARSED = 1
+    FAILED = 2
+
 
 
 class AsxInfo(Base):
@@ -37,6 +43,7 @@ class AsxInfo(Base):
     page_num = Column(Integer, nullable=False)
     file_size = Column(Text, nullable=False)
     downloaded = Column(Integer, default=DownloadStatus.NOT_DOWNLOADED)
+    parsed = Column(Integer, default=ParseStatus.NOT_PARSED)
     update_timestamp = Column(DateTime, default=func.now(), onupdate=func.now())
     update_user = Column(String(100), nullable=False)
 
@@ -175,3 +182,50 @@ class SystemLog(Base):
 
     def __repr__(self):
         return f"<SystemLog(id={self.id}, user='{self.user_id}', action='{self.action}')>"
+
+class ParseTemplateMR(Base):
+    """Parse template model for MR data"""
+    __tablename__ = 'parse_template_mr'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_name = Column(Text, nullable=False, comment="e.g. vanguard_au, asx_mit_notice, perpetual, etc")
+    INC_RAT = Column(Text)
+    DOM_INC = Column(Text)
+    DOM_DID = Column(Text)
+    # Add other fields here if required...
+    FOR_INC = Column(Text)
+    is_valid = Column(Boolean, default=True)
+    update_timestamp = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_parse_template_mr_name', 'template_name'),
+    )
+
+    def __repr__(self):
+        return f"<ParseTemplateMR(id={self.id}, template_name='{self.template_name}')>"
+
+
+class ParseTemplateNZ(Base):
+    """Parse template model for NZ data"""
+    __tablename__ = 'parse_template_nz'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_name = Column(Text, nullable=False, comment="e.g. asx_dividend, perpetual, etc")
+    currency = Column(Text)
+    income_rate = Column(Text)
+    aud2nzd = Column(Text)
+    franked_pct = Column(Text)
+    total = Column(Text)
+    unfranked_pct = Column(Text)
+    supplementary_dividend = Column(Text)
+    tax_rate = Column(Text)
+    is_valid = Column(Boolean, default=True)
+    update_timestamp = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_parse_template_nz_name', 'template_name'),
+    )
+
+    def __repr__(self):
+        return f"<ParseTemplateNZ(id={self.id}, template_name='{self.template_name}')>"
+

@@ -1,0 +1,142 @@
+C:\Users\alfre\Desktop\DMH_MR_Tool\src\dmh_mr_tool
+├── __init__.py
+├── __version__.py
+├── app
+│   ├── download
+│   └── log
+├── business
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   └── __init__.cpython-312.pyc
+│   ├── mappers
+│   │   ├── __init__.py
+│   │   └── vanguard_mapper.py
+│   ├── rules
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   └── mr_rules.py
+│   └── services
+│       ├── __init__.py
+│       ├── __pycache__
+│       │   ├── __init__.cpython-312.pyc
+│       │   ├── dmh_service.cpython-312.pyc
+│       │   ├── parser_service.cpython-312.pyc
+│       │   └── spider_service.cpython-312.pyc
+│       ├── dmh_service.py
+│       ├── parser_service.py
+│       ├── spider_service.py
+│       └── validation_service.py
+├── config
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   └── settings.cpython-312.pyc
+│   ├── config_path.ini
+│   ├── constants.py
+│   ├── settings.py
+│   └── validators.py
+├── core
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   ├── logging.cpython-312.pyc
+│   │   └── utils.cpython-312.pyc
+│   ├── logging.py
+│   └── utils.py
+├── database
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   ├── connection.cpython-312.pyc
+│   │   └── models.cpython-312.pyc
+│   ├── connection.py
+│   ├── models.py
+│   ├── repositories
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-312.pyc
+│   │   │   ├── asx_repository.cpython-312.pyc
+│   │   │   └── base.cpython-312.pyc
+│   │   ├── asx_repository.py
+│   │   ├── base.py
+│   │   ├── system_log_repository.py
+│   │   └── vanguard_repository.py
+│   └── schemas.sql
+├── main.py
+├── parsers
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   └── base.cpython-312.pyc
+│   ├── base.py
+│   ├── excel_parser.py
+│   ├── pdf_parser.py
+│   └── templates
+│       ├── __init__.py
+│       └── asx_nz_template.py
+├── spiders
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   └── asx_spider.cpython-312.pyc
+│   ├── asx_spider.py
+│   ├── base.py
+│   ├── betashares_spider.py
+│   ├── ishares_spider.py
+│   └── vanguard_spider.py
+└── ui
+    ├── __init__.py
+    ├── __pycache__
+    │   ├── __init__.cpython-312.pyc
+    │   └── main_window.cpython-312.pyc
+    ├── app.py
+    ├── main_window.py
+    ├── resource
+    │   ├── __pycache__
+    │   │   ├── resource.cpython-312.pyc
+    │   │   └── style_sheet.cpython-312.pyc
+    │   ├── convert_qrc_to_py.bat
+    │   ├── images
+    │   │   └── header.png
+    │   ├── qss
+    │   │   ├── dark
+    │   │   │   ├── base_interface.qss
+    │   │   │   ├── home_interface.qss
+    │   │   │   └── setting_interface.qss
+    │   │   └── light
+    │   │       ├── base_interface.qss
+    │   │       ├── home_interface.qss
+    │   │       └── setting_interface.qss
+    │   ├── resource.py
+    │   ├── resource.qrc
+    │   └── style_sheet.py
+    ├── utils
+    │   ├── __pycache__
+    │   │   ├── config.cpython-312.pyc
+    │   │   ├── infobar.cpython-312.pyc
+    │   │   └── signal_bus.cpython-312.pyc
+    │   ├── config.py
+    │   ├── infobar.py
+    │   └── signal_bus.py
+    └── views
+        ├── __init__.py
+        ├── __pycache__
+        │   ├── __init__.cpython-312.pyc
+        │   ├── base_view.cpython-312.pyc
+        │   ├── db_browser_view.cpython-312.pyc
+        │   ├── home_view.cpython-312.pyc
+        │   ├── login_view.cpython-312.pyc
+        │   ├── manual_view.cpython-312.pyc
+        │   ├── mr_update_view.cpython-312.pyc
+        │   ├── parser_view.cpython-312.pyc
+        │   ├── settings_view.cpython-312.pyc
+        │   └── spider_view.cpython-312.pyc
+        ├── base_view.py
+        ├── db_browser_view.py
+        ├── home_view.py
+        ├── login_view.py
+        ├── manual_view.py
+        ├── mr_update_view.py
+        ├── parser_view.py
+        ├── settings_view.py
+        └── spider_view.py

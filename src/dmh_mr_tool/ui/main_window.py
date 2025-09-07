@@ -75,6 +75,7 @@ class MainWindow(FluentWindow):
         pos = NavigationItemPosition.SCROLL
         self.addSubInterface(self.spiderInterface, FIF.ROBOT, 'Spider', pos)
         self.addSubInterface(self.parserInterface, FIF.SYNC, 'Parser', pos)
+        self.addSubInterface(self.mrUpdateInterface, FIF.UPDATE, 'MR Update', pos)
         self.addSubInterface(self.manualInterface, FIF.CLOUD, 'Manual', NavigationItemPosition.BOTTOM)
         self.addSubInterface(self.dbBrowserInterface, FIF.DOCUMENT, 'DB Browser', NavigationItemPosition.BOTTOM)
 

@@ -27,7 +27,7 @@ Data Sources & Formats
 •	ASX
 o	Announcement Metadata:
 	Fetched via HTML scraping from:
-[Announcement Search by ASX Code] https://www.betashares.com.au/fund/high-interest-cash-etf/#announcements
+[Announcement Search by ASX Code and year] https://www.betashares.com.au/fund/high-interest-cash-etf/#announcements
 [Daily Announcements] https://www.asx.com.au/markets/trade-our-cash-market/todays-announcements
 	Data includes announcement title, publish date, URL, and associated ASX code(Ticker).
 	Parsed using XPath; stored in SQLite.
@@ -75,8 +75,12 @@ CREATE TABLE if not exists asx_info (
     asx_code TEXT NOT NULL,
     title TEXT NOT NULL,
     pub_date DATE NOT NULL,
-    pdf_url TEXT NOT NULL,
-    downloaded INTEGER DEFAULT 0,     -- 0 = not downloaded, 1 = downloaded
+    pdf_url TEXT,
+    pdf_mask_url TEXT,
+    page_num INTEGER NOT NULL,
+    file_size TEXT NOT NULL,
+    downloaded INTEGER DEFAULT 0,     -- 0 = not downloaded, 1 = downloaded, 2 = failed
+    parsed INTEGER DEFAULT 0,     -- 0 = not parsed, 1 = successfully parsed, 2 = error occurred while parsing(failed parsed)
     update_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     update_user TEXT NOT NULL
 );
@@ -86,7 +90,11 @@ o	asx_code: ASX ticker code (e.g., "FLO")
 o	title: Announcement title
 o	pub_date: Publish date of the announcement(yyyy-mm-dd)
 o	pdf_url: Direct link to the PDF announcement
+o	pdf_mask_url: Link to the actual PDF’s url
+o	page_num: Page number of the PDF announcement
+o	file_size: File size of the PDF announcement
 o	downloaded: Flag indicating if the PDF has been downloaded
+o	parsed: Flag indicating if the PDF has been parsed to business data and stored
 o	update_timestamp: Timestamp of when the record was last updated. Defaults to the current system timestamp at insertion
 o	update_user: Username of the user who last updated or inserted the record. Required
 Sample rows:
@@ -96,7 +104,11 @@ asx_code	FLO	VAS
 title	Dividend component details	Distribution Tax Estimates
 pub_date	2025-03-11	2025-02-07
 pdf_url	https://announcements.asx.com.au/asxpdf/20250624/pdf/06l1zp5dnpnylp.pdf	https://announcements.asx.com.au/asxpdf/20250702/pdf/06ld3q9c94dgw9.pdf
+pdf_mask_url	https://www.asx.com.au/asx/v2/statistics/displayAnnouncement.do?display=pdf&idsId=02991191	https://www.asx.com.au/asx/v2/statistics/displayAnnouncement.do?display=pdf&idsId=02989728
+page_num	15	2
+file_size	315.8 kb	171.0 kb
 downloaded	1	0
+parsed	2	0
 update_timestamp	1753886256	1753886264
 update_user	Alfred	Colin
 
@@ -192,6 +204,36 @@ CREATE TABLE IF NOT EXISTS sys_log (
     -- Optional: time taken to complete the action
 );
 
+•	Table parse_template
+Templates used to parse .xlsx or .pdf data in the Parse Interface. Each column name is a component code in DMH backend database system. For parse_template_mr, the column names related to d_code in column_map table. For parse_template_nz, the column names related to column names in table asx_nz_data.
+create table if not exists parse_template_mr(
+    id integer primary key autoincrement,
+    template_name text, -- e.g. vanguard_au, asx_mit_notice, perpetual, etc
+    INC_RAT text,
+    DOM_INC text,
+    DOM_DID text,
+    -- ... other fields
+    FOR_INC text,
+    is_valid text,
+    update_timestamp DATETIME default CURRENT_TIMESTAMP
+);
+
+create table if not exists parse_template_nz(
+    id integer primary key autoincrement,
+    template_name text, -- e.g. asx_dividend, perpetual, etc
+    currency TEXT, 
+    income_rate TEXT,
+    aud2nzd TEXT,
+    franked_pct TEXT,
+    total TEXT,
+    unfranked_pct TEXT,
+    supplementary_dividend TEXT,
+    tax_rate TEXT,
+    is_valid text,
+    update_timestamp DATETIME default CURRENT_TIMESTAMP
+);
+
+
 UI System
 Home Interface:
 Software Usage Dashboard/Overview
@@ -202,10 +244,10 @@ Download data from a custom website using a custom ASX code (Card Area – butto
 Activate daily spider process (Top area - button - Update the latest information from each website and download data required Send the data to backend parser and flow to the MR Update Interface if any data created by parser)
 Show the database information, including table, DB address (Card Area)
 Parse Interface:
-Drag and drop a file (usually a .pdf or .xlsx file contains dividend data) in a gray area, then select a template to start a File Parser process and display the result. The UI will display the template in a form first and the display the parsed content in the form.
+Drag and drop a file (usually a .pdf or .xlsx file contains dividend data) in a small gray area, then select a template to start a File Parser process and display the result. The UI will display the template with the parsed result in the form.
 Column Name 1 in DB | re pattern 1 | (value after parsed, can be edited) | comment
 Column Name 2 in DB | re pattern 2 | (value after parsed, can be edited) | comment
-Some columns are not directly parsed from the file, a certain number of business rules will apply on them, like it can be the sum of other columns. In this case, the applied business rules will be displayed in the Comment field.
+Some columns are not directly parsed from the file, a certain number of business rules will apply on them, like it can be the sum of other columns. In this case, the applied business rules will be displayed in the Comment field automatically.
 E.g.
 Template asx_nz_data:
 Column Name	re pattern	value	comment
@@ -216,22 +258,22 @@ tax_rate		0.3	Default value per client specific
 This form will include formula and validation column in the future version. As for now, users can submit formula and validation to the developer for adding them in a certain template.
 	Add an extra row from a dropdown list of column name, and input a value and comment
     Invalid input will raise a fly-out-right-top window to alert users.
-	Submit the entire form (Use added row included) to MR Update Interface. User will be asked to input some extra information used to display in the MR Update Interface in a pop-out window (Bottom area - button)
+	Submit the entire form (Use added row included) to MR Update Interface. User will be asked to input some extra information (i.e., Asset_ID, Ex_Date, Pay_Date, MR_Income_Rate) used to display in the MR Update Interface in a pop-out window (Bottom area - button)
 Or ignore the drop and drop area, input a folder path in a text-input field. The files in the folder will automatically parsed and flow to the MR Update Interface.
 MR Update Interface:
 	An editable table area will show, table will have a fixed column name set
 	E.g.
-Client_ID	Group_Fund	Fund	Asset_ID	Ex_Date	Pay_Date	MR_Income	Type	Source File Path	status
-AURR	LUSC,LUSU	REUC	902XGW000	20250731	20250806	0.89	Other		
-MBFF		MAR1	952LEII3	20250701	20251031	0.004461	Last Actual		
-MBFF		MAR1	999XEL901	20250731	20251031	7.89	Template - PIII	C:\Users\999XEL90 – All – 30Jun2025 – EST.pdf	
+Client_ID	Fund	Asset_ID	Ex_Date	Pay_Date	MR_Income	Type	Actoin_bar	status
+AURR	REUC	902XGW000	20250731	20250806	0.89	Other	Fetch_button|Parse_button	
+MBFF	MAR1	952LEII3	20250701	20251031	0.004461	Last Actual	Fetch_button|Parse_button	
+MBFF	MAR1	999XEL901	20250731	20251031	7.89	Template - PIII	Fetch_button|Parse_button	
 
 	Task data can be pasted in this area, including task info from Parse Interface
 	Submit this task form to DMH system (bottom Area – Button)
 	Real-time submitting status will display in the table
-	Double click a single row in the table will show the specific business data of it, i.e., a pop-out window containing a table with MR columns and values in it, for previewing the data submitted to the DMH system.
-	Automatically save the backup file, i.e., source file that contains business data and been parsed, whether it’s from MR Update Interface’s Source File Path or already downloaded in the Spider Interface’s daily process, (Save it as a new file in the backup-file path and rename it to {Asset_ID}_{Client_ID}_{Ex_Date in %d%b%Y format}_{EST or ACT}) when updating successfully (each task row will generate a backup file)
-	Any runtime error will raise a fly-out-right-top window to alert users. If the error occurred before the updating stage, the user could adjust their inputs to fix the error. If the error occurred while updating to DMH, successfully updated entry will show the “success” status, while other remains “failed”.
+	Double clicking a single record (or click the Parse Button of a record) in the table will automatically redirect to the Parse Interface and show the specific business data of it, for previewing the data submitted to the DMH system, or making any changes of the data and then submit it to the MR Update Interface again.
+	Automatically save the backup file, i.e., source file that contains business data and been parsed, whether it’s from MR Update Interface’s Source File Path or already downloaded in the Spider Interface’s daily process, (Save it as a new file in the backup-file path and rename it to {Asset_ID}_{Client_ID}_{Ex_Date in %d%b%Y format}_{EST or ACT}) when updating successfully (each task row will generate one backup file)
+	Any runtime error will raise a fly-out-right-top info bar to alert users. If the error occurred before the updating stage, the user could adjust their inputs to fix the error. If the error occurred while updating to DMH, successfully updated entry will show the “success” status, while other remains “failed”.
 DB Browser Interface:
 	Query a remote Sqlite3 database by SQL (Top Area)
 	Query result will be displayed (Bottom Area)
