@@ -7,11 +7,11 @@ from ui.resource.style_sheet import StyleSheet
 
 
 class SeparatorWidget(QWidget):
-    """ Separator widget"""
+    """Horizontal separator widget"""
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self.setFixedSize(6, 16)
+        self.setFixedHeight(15)  # 仅固定高度，宽度由布局控制
 
     def paintEvent(self, e):
         painter = QPainter(self)
@@ -21,6 +21,9 @@ class SeparatorWidget(QWidget):
         pen.setColor(c)
         painter.setPen(pen)
 
+        y = self.height() // 2
+        painter.drawLine(0, y, self.width(), y)
+
 
 class PageHead(QWidget):
     def __init__(self, title, subtitle, parent=None):
@@ -28,7 +31,6 @@ class PageHead(QWidget):
         self.title_label = TitleLabel(title, self)
         self.subtitle_label = CaptionLabel(subtitle, self)
 
-        self.separator = SeparatorWidget(self)
         self.vBoxLayout = QVBoxLayout(self)
         self.hBoxLayout = QHBoxLayout(self)
         self.buttonLayout = QHBoxLayout()
@@ -100,6 +102,7 @@ class PageBody(QWidget):
 
         self.bottomLayout.addStretch(1)
         self.bottomLayout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
 
 class BaseInterface(ScrollArea):
     """ Tool's base interface for every tab"""

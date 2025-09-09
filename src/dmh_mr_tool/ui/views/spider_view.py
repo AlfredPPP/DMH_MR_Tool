@@ -1,599 +1,546 @@
 # src/dmh_mr_tool/ui/views/spider_view.py
-"""Spider interface for web scraping and data collection"""
+"""Spider Interface for fetching and managing announcement data"""
 
 import asyncio
-from datetime import datetime
-from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+from typing import Optional, List
 
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QPushButton, QLabel, QLineEdit, QDateEdit,
-    QTableWidget, QTableWidgetItem,
-    QProgressBar, QTextEdit, QSplitter,
-    QMessageBox, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QHeaderView, QTextEdit, QPushButton
 )
-from PySide6.QtCore import Qt, QDate
-from PySide6.QtGui import QFont
-import structlog
-
 from qfluentwidgets import (
-    PrimaryPushButton, PushButton, BodyLabel, StrongBodyLabel,
-    LineEdit, DatePicker, TableWidget, ProgressBar,
-    TextEdit, CardWidget, FluentIcon as FIF,
-    InfoBarPosition
+    LineEdit, ComboBox, PushButton, PrimaryPushButton,
+    ProgressRing, TableWidget, CardWidget, StrongBodyLabel,
+    BodyLabel, CaptionLabel, InfoBar, InfoBarPosition,
+    SpinBox, FluentIcon as FIF, IndeterminateProgressRing
 )
+from qasync import asyncSlot
 
-from ui.views.base_view import BaseInterface
+from ..views.base_view import BaseInterface, SeparatorWidget
 from ui.utils.signal_bus import signalBus
+from ui.utils.infobar import raise_error_bar_in_class
 from business.services.spider_service import SpiderService
-from database.connection import DatabaseManager, DatabaseConfig
-from database.repositories.asx_repository import AsxInfoRepository, AsxNzDataRepository
-from database.models import SystemLog
+from database.connection import DatabaseManager
+from database.repositories.asx_repository import AsxInfoRepository
+from database.models import AsxInfo
 from config.settings import CONFIG
+from core.utils import USERNAME
+
+import structlog
 
 logger = structlog.get_logger()
 
 
+class DataSourceCard(CardWidget):
+    """Card widget showing data source status"""
+
+    def __init__(self, source_name: str, parent=None):
+        super().__init__(parent)
+        self.source_name = source_name
+        self.setupUI()
+
+    def setupUI(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        # Source name
+        self.nameLabel = StrongBodyLabel(self.source_name, self)
+        layout.addWidget(self.nameLabel)
+
+        # Last update time
+        self.updateTimeLabel = BodyLabel("Last Update: -", self)
+        layout.addWidget(self.updateTimeLabel)
+
+        # Record count
+        self.countLabel = CaptionLabel("Records: 0", self)
+        layout.addWidget(self.countLabel)
+
+        self.setFixedHeight(100)
+
+    def updateStatus(self, last_update: Optional[datetime], count: int):
+        """Update the card with latest status"""
+        if last_update:
+            time_str = last_update.strftime("%Y-%m-%d %H:%M:%S")
+            self.updateTimeLabel.setText(f"Last Update: {time_str}")
+        else:
+            self.updateTimeLabel.setText("Last Update: Never")
+        self.countLabel.setText(f"Records: {count:,}")
+
+
 class SpiderInterface(BaseInterface):
-    """Spider interface for data collection using qasync"""
+    """Spider Interface for data fetching operations"""
 
     def __init__(self, parent=None):
         super().__init__(
-            title="Spider - Data Collection",
-            subtitle="Web scraping and data collection tools",
+            title="Spider",
+            subtitle="Fetch and manage announcement data from various sources",
             parent=parent
         )
-        self.setObjectName('spiderInterface')
-        self.parent_window = parent
-        self.db_manager: Optional[DatabaseManager] = None
-        self.spider_service: Optional[SpiderService] = None
-        self.last_update_times = {}
-        self.current_operation: Optional[asyncio.Task] = None
+        self.setObjectName('dbBrowserInterface')
+        self.db_manager = None
+        self.spider_service = None
+        self.initUI()
+        self.initDatabase()
+        self.connectSignalToSlot()
 
-        self._init_services()
-        self._setup_ui()
-        self._load_update_times()
-        self._connect_signals()
+        # Auto refresh status on load
+        QTimer.singleShot(100, self.refreshDataSourceStatus)
 
-    def _init_services(self):
+    def initDatabase(self):
         """Initialize database manager and spider service"""
-        try:
-            # Initialize database manager
-            self.db_manager = DatabaseManager(DatabaseConfig(path=CONFIG.database.path))
-            self.db_manager.initialize()
+        self.db_manager = DatabaseManager(CONFIG.database)
+        self.db_manager.initialize()
+        self.spider_service = SpiderService(self.db_manager)
 
-            # Initialize spider service with database manager
-            self.spider_service = SpiderService(self.db_manager)
+    def initUI(self):
+        """Initialize the user interface"""
+        # UI body
+        self.body_layout = QVBoxLayout()
+        widget = QWidget()
+        widget.setLayout(self.body_layout)
 
-            logger.info("Spider services initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize spider services: {e}")
-            signalBus.infoBarSignal.emit("ERROR", "Initialization Error",
-                                         f"Failed to initialize spider services: {str(e)}")
+        # Data source status cards
+        self.addDataSourceStatus()
 
-    def _setup_ui(self):
-        """Set up the spider interface"""
-        # Daily Update Section
-        self._create_daily_update_section()
+        # ASX daily data fetch
+        self.addDailyDataFetch()
 
-        # Data Source Cards Section
-        self._create_data_source_section()
+        # ASX specific ticker fetch
+        self.addSpecificTickerFetch()
 
-        # Database Info Section
-        self._create_database_info_section()
+        # Batch update section
+        self.addBatchUpdate()
 
-        # Activity Log Section
-        self._create_activity_log_section()
+        # Activity log
+        self.addActivityLog()
 
-    def _create_daily_update_section(self):
-        """Create daily update control section"""
-        # Main container
-        daily_update_widget = QWidget()
-        layout = QVBoxLayout(daily_update_widget)
+        self.addPageBody("", widget, stretch=1)
 
-        # Title and button row
-        header_layout = QHBoxLayout()
+    def addDataSourceStatus(self):
+        """Add data source status cards"""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setSpacing(16)
 
-        # Daily update button
-        self.daily_update_btn = PrimaryPushButton(FIF.SYNC, "Run Daily Update")
-        self.daily_update_btn.setMinimumHeight(50)
-        self.daily_update_btn.setMinimumWidth(200)
-        self.daily_update_btn.clicked.connect(self._on_daily_update_clicked)
-        header_layout.addWidget(self.daily_update_btn)
+        # Create status cards for each data source
+        self.asxCard = DataSourceCard("ASX", widget)
+        self.vanguardCard = DataSourceCard("Vanguard", widget)
+        self.betasharesCard = DataSourceCard("BetaShares", widget)
+        self.isharesCard = DataSourceCard("iShares (TBD)", widget)
 
-        # Progress info
-        progress_widget = QWidget()
-        progress_layout = QVBoxLayout(progress_widget)
-
-        self.progress_label = BodyLabel("Ready")
-        self.progress_bar = ProgressBar()
-        self.progress_bar.setVisible(False)
-
-        progress_layout.addWidget(self.progress_label)
-        progress_layout.addWidget(self.progress_bar)
-
-        header_layout.addWidget(progress_widget)
-        header_layout.addStretch()
-
-        layout.addLayout(header_layout)
-
-        self.addPageBody("Daily Update", daily_update_widget)
-
-    def _create_data_source_section(self):
-        """Create data source cards section"""
-        cards_widget = QWidget()
-        cards_layout = QHBoxLayout(cards_widget)
-
-        # ASX Card
-        self.asx_card = self._create_data_source_card("ASX", "asx", True)
-        cards_layout.addWidget(self.asx_card)
-
-        # Vanguard Card
-        self.vanguard_card = self._create_data_source_card("Vanguard", "vanguard", False)
-        cards_layout.addWidget(self.vanguard_card)
-
-        # BetaShares Card
-        self.betashares_card = self._create_data_source_card("BetaShares", "betashares", False)
-        cards_layout.addWidget(self.betashares_card)
-
-        self.addPageBody("Data Sources", cards_widget)
-
-    def _create_data_source_card(self, title: str, source: str, supports_ticker: bool) -> CardWidget:
-        """Create a data source card"""
-        card = CardWidget()
-        card.setMinimumHeight(200)
-        layout = QVBoxLayout(card)
-
-        # Title
-        title_label = StrongBodyLabel(title)
-        layout.addWidget(title_label)
-
-        # Last update time
-        update_time = self.last_update_times.get(source, "Never")
-        update_label = BodyLabel(f"Last Update: {update_time}")
-        update_label.setObjectName(f"{source}_update_label")
-        layout.addWidget(update_label)
-
-        # Separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(separator)
-
-        # Date fetch section
-        date_layout = QHBoxLayout()
-        date_layout.addWidget(BodyLabel("Date:"))
-
-        date_picker = DatePicker()
-        date_picker.setDate(QDate.currentDate())
-        date_picker.setObjectName(f"{source}_date")
-        date_layout.addWidget(date_picker)
-
-        fetch_date_btn = PushButton("Fetch")
-        fetch_date_btn.clicked.connect(lambda: self._on_fetch_single_date_clicked(source))
-        date_layout.addWidget(fetch_date_btn)
-
-        layout.addLayout(date_layout)
-
-        # Ticker fetch section (ASX only)
-        if supports_ticker:
-            ticker_layout = QHBoxLayout()
-            ticker_layout.addWidget(BodyLabel("Ticker:"))
-
-            ticker_input = LineEdit()
-            ticker_input.setPlaceholderText("e.g., FLO")
-            ticker_input.setObjectName(f"{source}_ticker")
-            ticker_layout.addWidget(ticker_input)
-
-            fetch_ticker_btn = PushButton("Fetch")
-            fetch_ticker_btn.clicked.connect(lambda: self._on_fetch_by_ticker_clicked(source))
-            ticker_layout.addWidget(fetch_ticker_btn)
-
-            layout.addLayout(ticker_layout)
-
+        layout.addWidget(self.asxCard)
+        layout.addWidget(self.vanguardCard)
+        layout.addWidget(self.betasharesCard)
+        layout.addWidget(self.isharesCard)
         layout.addStretch()
-        return card
 
-    def _create_database_info_section(self):
-        """Create database information section"""
-        self.db_info_table = TableWidget()
-        self.db_info_table.setColumnCount(2)
-        self.db_info_table.setHorizontalHeaderLabels(["Property", "Value"])
-        self.db_info_table.horizontalHeader().setStretchLastSection(True)
-        self.db_info_table.setMaximumHeight(200)
-        self.db_info_table.setMinimumWidth(600)
+        title = StrongBodyLabel("Data Source Status")
+        self.body_layout.addWidget(title)
+        self.body_layout.addWidget(widget)
+        self.body_layout.addWidget(SeparatorWidget(self))
 
-        self._populate_db_info()
-        self.addPageBody("Database Information", self.db_info_table)
+    def addDailyDataFetch(self):
+        """Add daily data fetch section"""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setSpacing(12)
 
-    def _create_activity_log_section(self):
-        """Create activity log section"""
-        self.log_output = TextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(150)
+        # Date selection
+        self.dailyComboBox = ComboBox(widget)
+        self.dailyComboBox.addItems(["Today", "Previous Business Day"])
+        self.dailyComboBox.setCurrentIndex(1)  # Default to previous day
 
-        self.addPageBody("Activity Log", self.log_output)
+        # Fetch button
+        self.dailyFetchBtn = PrimaryPushButton("Fetch Daily Data", widget)
+        self.dailyFetchBtn.setIcon(FIF.DOWNLOAD)
+        self.dailyFetchBtn.clicked.connect(self.onDailyFetch)
 
-    def _populate_db_info(self):
-        """Populate database information table using repositories"""
-        try:
-            if self.db_manager:
-                # Get database info using repositories
-                db_info = self._get_database_info_via_repositories()
-                info = [
-                    ("Database Path", db_info.get('db_path', 'N/A')),
-                    ("Backup Path", db_info.get('backup_path', 'N/A')),
-                    ("Tables", db_info.get('tables', 'N/A')),
-                    ("Total Records", str(db_info.get('total_records', 'N/A'))),
-                    ("ASX Info Records", str(db_info.get('asx_info_records', 'N/A'))),
-                    ("ASX NZ Data Records", str(db_info.get('asx_nz_records', 'N/A'))),
-                    ("Undownloaded PDFs", str(db_info.get('undownloaded_count', 'N/A'))),
-                    ("Connection Status", db_info.get('connection_status', 'N/A'))
-                ]
-            else:
-                info = [
-                    ("Database Path", "Service not available"),
-                    ("Backup Path", "Service not available"),
-                    ("Tables", "asx_info, asx_nz_data, vanguard_data, vanguard_mapping, column_map, sys_log"),
-                    ("Connection Status", "Disconnected")
-                ]
-        except Exception as e:
-            logger.error(f"Failed to get database info: {e}")
-            info = [("Error", "Failed to load database information")]
+        # Progress indicator
+        self.dailyProgress = ProgressRing(widget)
+        self.dailyProgress.setFixedSize(24, 24)
+        self.dailyProgress.setVisible(False)
 
-        self.db_info_table.setRowCount(len(info))
-        for i, (key, value) in enumerate(info):
-            self.db_info_table.setItem(i, 0, QTableWidgetItem(key))
-            self.db_info_table.setItem(i, 1, QTableWidgetItem(value))
+        layout.addWidget(BodyLabel("ASX Daily Data:", widget))
+        layout.addWidget(self.dailyComboBox)
+        layout.addWidget(self.dailyFetchBtn)
+        layout.addWidget(self.dailyProgress)
+        layout.addStretch()
 
-        for col in range(0, self.db_info_table.colorCount()):
-            self.db_info_table.resizeColumnToContents(col)
+        title = StrongBodyLabel("Fetch Daily Announcements")
+        self.body_layout.addWidget(title)
+        self.body_layout.addWidget(widget)
+        self.body_layout.addWidget(SeparatorWidget(self))
 
-    def _get_database_info_via_repositories(self) -> Dict[str, Any]:
-        """Get database information using repository pattern"""
-        try:
-            if not self.db_manager:
-                return {"connection_status": "Database manager not available"}
+    def addSpecificTickerFetch(self):
+        """Add specific ticker fetch section"""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setSpacing(12)
 
-            with self.db_manager.session() as session:
-                # Initialize repositories
-                asx_info_repo = AsxInfoRepository(session)
-                asx_nz_repo = AsxNzDataRepository(session)
+        # ASX code input
+        self.asxCodeEdit = LineEdit(widget)
+        self.asxCodeEdit.setPlaceholderText("Enter ASX Code (e.g., FLO)")
+        self.asxCodeEdit.setFixedWidth(200)
 
-                # Get record counts using repository methods
-                asx_info_count = asx_info_repo.count()
-                asx_nz_count = asx_nz_repo.count()
-                undownloaded_count = len(asx_info_repo.get_undownloaded())
-                total_count = asx_info_count + asx_nz_count
+        # Year selection
+        current_year = datetime.now().year
+        self.yearSpinBox = SpinBox(widget)
+        self.yearSpinBox.setRange(2020, current_year + 1)
+        self.yearSpinBox.setValue(current_year)
 
-                # Get database path from config
-                db_path = getattr(CONFIG.database, 'path', 'Not configured')
-                backup_path = getattr(CONFIG.paths, 'backup_path', 'Not configured')
+        # Fetch button
+        self.tickerFetchBtn = PrimaryPushButton("Fetch Ticker Data", widget)
+        self.tickerFetchBtn.setIcon(FIF.SEARCH)
+        self.tickerFetchBtn.clicked.connect(self.onTickerFetch)
 
-                return {
-                    'db_path': str(db_path),
-                    'backup_path': str(backup_path),
-                    'tables': 'asx_info, asx_nz_data, vanguard_data, vanguard_mapping, column_map, sys_log',
-                    'total_records': total_count,
-                    'asx_info_records': asx_info_count,
-                    'asx_nz_records': asx_nz_count,
-                    'undownloaded_count': undownloaded_count,
-                    'connection_status': 'Connected'
-                }
+        # Progress indicator
+        self.tickerProgress = IndeterminateProgressRing(widget)
+        self.tickerProgress.setFixedSize(24, 24)
+        self.tickerProgress.setVisible(False)
 
-        except Exception as e:
-            logger.error(f"Failed to get database info via repositories: {e}")
-            return {
-                'connection_status': f'Error: {str(e)}',
-                'db_path': 'Error',
-                'backup_path': 'Error',
-                'tables': 'Error',
-                'total_records': 'Error',
-                'asx_info_records': 'Error',
-                'asx_nz_records': 'Error',
-                'undownloaded_count': 'Error'
+        layout.addWidget(BodyLabel("ASX Code:", widget))
+        layout.addWidget(self.asxCodeEdit)
+        layout.addWidget(BodyLabel("Year:", widget))
+        layout.addWidget(self.yearSpinBox)
+        layout.addWidget(self.tickerFetchBtn)
+        layout.addWidget(self.tickerProgress)
+        layout.addStretch()
+
+        title = StrongBodyLabel("Fetch Specific Ticker Announcements")
+        self.body_layout.addWidget(title)
+        self.body_layout.addWidget(widget)
+        self.body_layout.addWidget(SeparatorWidget(self))
+
+    def addBatchUpdate(self):
+        """Add batch update section"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(12)
+
+        # Batch controls
+        controlLayout = QHBoxLayout()
+
+        self.batchUpdateBtn = PrimaryPushButton("Run Daily Spider", widget)
+        self.batchUpdateBtn.setIcon(FIF.SYNC)
+        self.batchUpdateBtn.clicked.connect(self.onBatchUpdate)
+
+        self.syncUrlBtn = PushButton("Sync PDF URLs", widget)
+        self.syncUrlBtn.setIcon(FIF.LINK)
+        self.syncUrlBtn.clicked.connect(self.onSyncUrls)
+
+        self.batchProgress = ProgressRing(widget)
+        self.batchProgress.setFixedSize(24, 24)
+        self.batchProgress.setVisible(False)
+
+        controlLayout.addWidget(self.batchUpdateBtn)
+        controlLayout.addWidget(self.syncUrlBtn)
+        controlLayout.addWidget(self.batchProgress)
+        controlLayout.addStretch()
+
+        # Status label
+        self.batchStatusLabel = CaptionLabel("Ready to update all data sources", widget)
+
+        layout.addLayout(controlLayout)
+        layout.addWidget(self.batchStatusLabel)
+
+        title = StrongBodyLabel("Batch Operations")
+        self.body_layout.addWidget(title)
+        self.body_layout.addWidget(widget)
+        self.body_layout.addWidget(SeparatorWidget(self))
+
+    def addActivityLog(self):
+        """Add activity log section"""
+        self.logTextEdit = QTextEdit()
+        self.logTextEdit.setReadOnly(True)
+        self.logTextEdit.setMaximumHeight(200)
+        self.logTextEdit.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 12px;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px;
             }
+        """)
 
-    def _load_update_times(self):
-        """Load last update times from database using repositories"""
-        try:
-            if not self.db_manager:
-                self.last_update_times = {
-                    "asx": "Service not available",
-                    "vanguard": "Service not available",
-                    "betashares": "Service not available"
-                }
-                return
+        # Clear log button
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
 
-            with self.db_manager.session() as session:
-                # Query sys_log table using SQLAlchemy ORM instead of raw SQL
-                from sqlalchemy import func, and_
+        clearBtn = PushButton("Clear Log", widget)
+        clearBtn.setIcon(FIF.DELETE)
+        clearBtn.clicked.connect(self.logTextEdit.clear)
 
-                # Get latest ASX update time
-                asx_log = session.query(func.max(SystemLog.update_timestamp)).filter(
-                    SystemLog.action.like('%asx%')
-                ).scalar()
+        layout.addWidget(self.logTextEdit)
+        layout.addWidget(clearBtn, alignment=Qt.AlignmentFlag.AlignRight)
 
-                # Get latest Vanguard update time
-                vanguard_log = session.query(func.max(SystemLog.update_timestamp)).filter(
-                    SystemLog.action.like('%vanguard%')
-                ).scalar()
+        title = StrongBodyLabel("Activity Log")
+        self.body_layout.addWidget(title)
+        self.body_layout.addWidget(widget)
 
-                # Get latest BetaShares update time
-                betashares_log = session.query(func.max(SystemLog.update_timestamp)).filter(
-                    SystemLog.action.like('%betashares%')
-                ).scalar()
+    def connectSignalToSlot(self):
+        """Connect signals to slots"""
+        # Connect to signal bus for cross-component communication
+        if hasattr(signalBus, 'spiderProgressSignal'):
+            signalBus.spiderProgressSignal.connect(self.updateProgress)
 
-                # Alternative: Get last update from asx_info table
-                asx_info_repo = AsxInfoRepository(session)
-                latest_asx_records = session.query(func.max(asx_info_repo.model.update_timestamp)).scalar()
-
-                self.last_update_times = {
-                    "asx": (asx_log or latest_asx_records).strftime("%Y-%m-%d %H:%M") if (
-                                asx_log or latest_asx_records) else "Never",
-                    "vanguard": vanguard_log.strftime("%Y-%m-%d %H:%M") if vanguard_log else "Never",
-                    "betashares": betashares_log.strftime("%Y-%m-%d %H:%M") if betashares_log else "Never"
-                }
-
-        except Exception as e:
-            logger.error(f"Failed to load update times: {e}")
-            self.last_update_times = {
-                "asx": "Error loading",
-                "vanguard": "Error loading",
-                "betashares": "Error loading"
-            }
-
-    def _connect_signals(self):
-        """Connect to signal bus"""
-        signalBus.spiderProgressSignal.connect(self._on_progress)
-        signalBus.spiderLogSignal.connect(self._on_log_message)
-
-    # Sync wrapper methods for button clicks
-    def _on_daily_update_clicked(self):
-        """Handle daily update button click"""
-        asyncio.create_task(self._run_daily_update())
-
-    def _on_fetch_single_date_clicked(self, source: str):
-        """Handle fetch single date button click"""
-        asyncio.create_task(self._fetch_single_date(source))
-
-    def _on_fetch_by_ticker_clicked(self, source: str):
-        """Handle fetch by ticker button click"""
-        asyncio.create_task(self._fetch_by_ticker(source))
-
-    async def _run_daily_update(self):
-        """Run the daily update process using async/await"""
-        if self.current_operation and not self.current_operation.done():
-            signalBus.infoBarSignal.emit("WARNING", "Operation in Progress",
-                                         "Another operation is already running.")
-            return
-
-        if not self.spider_service:
-            signalBus.infoBarSignal.emit("ERROR", "Service Error",
-                                         "Spider service is not available.")
-            return
-
-        try:
-            self.daily_update_btn.setEnabled(False)
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
-            self.progress_label.setText("Starting daily update...")
-
-            signalBus.spiderLogSignal.emit("Starting daily update process...")
-
-            # Execute the daily update
-            results = await self._execute_daily_update()
-
-            self._handle_daily_update_complete(results)
-
-        except Exception as e:
-            logger.error(f"Daily update failed: {e}")
-            self._handle_operation_error(str(e))
-        finally:
-            self.daily_update_btn.setEnabled(True)
-            self.progress_bar.setVisible(False)
-            self.progress_label.setText("Ready")
-
-    async def _execute_daily_update(self) -> Dict[str, Any]:
-        """Execute the daily update process"""
-        results = {
-            "asx": {"count": 0, "errors": []},
-            "vanguard": {"count": 0, "errors": []},
-            "betashares": {"count": 0, "errors": []}
-        }
-
-        try:
-            # Update ASX
-            signalBus.spiderProgressSignal.emit(10, "Fetching ASX announcements...")
-            try:
-                # Use actual spider service method
-                asx_codes = ["FLO", "VAS", "VTS"]  # Example codes, get from config
-                year = str(datetime.now().year)
-                await self.spider_service.crawl_asx_info(asx_codes, year)
-
-                # Get count using repository
-                with self.db_manager.session() as session:
-                    asx_repo = AsxInfoRepository(session)
-                    # Get recent records added today
-                    from datetime import date
-                    today_records = asx_repo.get_by_date_range(date.today(), date.today())
-                    asx_count = len(today_records)
-
-                results["asx"]["count"] = asx_count
-                signalBus.spiderLogSignal.emit(f"Fetched {asx_count} ASX announcements")
-            except Exception as e:
-                results["asx"]["errors"].append(str(e))
-                signalBus.spiderLogSignal.emit(f"ASX fetch failed: {e}")
-
-            # Update Vanguard
-            signalBus.spiderProgressSignal.emit(40, "Fetching Vanguard data...")
-            try:
-                # Add actual Vanguard fetching logic here
-                vanguard_count = 15  # Placeholder
-                results["vanguard"]["count"] = vanguard_count
-                signalBus.spiderLogSignal.emit(f"Fetched {vanguard_count} Vanguard records")
-            except Exception as e:
-                results["vanguard"]["errors"].append(str(e))
-                signalBus.spiderLogSignal.emit(f"Vanguard fetch failed: {e}")
-
-            # Update BetaShares
-            signalBus.spiderProgressSignal.emit(70, "Fetching BetaShares data...")
-            try:
-                # Add actual BetaShares fetching logic here
-                betashares_count = 8  # Placeholder
-                results["betashares"]["count"] = betashares_count
-                signalBus.spiderLogSignal.emit(f"Fetched {betashares_count} BetaShares announcements")
-            except Exception as e:
-                results["betashares"]["errors"].append(str(e))
-                signalBus.spiderLogSignal.emit(f"BetaShares fetch failed: {e}")
-
-            signalBus.spiderProgressSignal.emit(100, "Daily update complete")
-
-        except Exception as e:
-            logger.error(f"Daily update process failed: {e}")
-            raise
-
-        return results
-
-    async def _fetch_single_date(self, source: str):
-        """Fetch data for a single date"""
-        if self.current_operation and not self.current_operation.done():
-            signalBus.infoBarSignal.emit("WARNING", "Operation in Progress",
-                                         "Another operation is already running.")
-            return
-
-        try:
-            date_picker = self.findChild(DatePicker, f"{source}_date")
-            if not date_picker:
-                return
-
-            target_date = date_picker.date.toPython()
-
-            signalBus.spiderLogSignal.emit(f"Fetching {source} data for {target_date}")
-
-            # Execute single date fetch
-            result = await self._execute_single_date_fetch(source, target_date)
-
-            self._handle_fetch_complete(result)
-
-        except Exception as e:
-            logger.error(f"Single date fetch failed: {e}")
-            self._handle_operation_error(str(e))
-
-    async def _fetch_by_ticker(self, source: str):
-        """Fetch data by ticker"""
-        if self.current_operation and not self.current_operation.done():
-            signalBus.infoBarSignal.emit("WARNING", "Operation in Progress",
-                                         "Another operation is already running.")
-            return
-
-        try:
-            ticker_input = self.findChild(LineEdit, f"{source}_ticker")
-            if not ticker_input:
-                return
-
-            ticker = ticker_input.text().strip().upper()
-            if not ticker:
-                signalBus.infoBarSignal.emit("WARNING", "Input Error",
-                                             "Please enter a ticker code.")
-                return
-
-            signalBus.spiderLogSignal.emit(f"Fetching {source} data for ticker {ticker}")
-
-            # Execute ticker fetch using spider service
-            result = await self._execute_ticker_fetch(source, ticker)
-
-            self._handle_fetch_complete(result)
-
-        except Exception as e:
-            logger.error(f"Ticker fetch failed: {e}")
-            self._handle_operation_error(str(e))
-
-    async def _execute_single_date_fetch(self, source: str, target_date) -> Dict[str, Any]:
-        """Execute single date fetch"""
-        # Implement actual single date fetch using spider service
-        if source.lower() == "asx":
-            # Use repository to check if data exists for this date
-            with self.db_manager.session() as session:
-                asx_repo = AsxInfoRepository(session)
-                existing_records = asx_repo.get_by_date_range(target_date, target_date)
-                count = len(existing_records)
-        else:
-            count = 3  # Placeholder for other sources
-
-        return {"count": count, "source": source, "date": str(target_date)}
-
-    async def _execute_ticker_fetch(self, source: str, ticker: str) -> Dict[str, Any]:
-        """Execute ticker fetch"""
-        # Implement actual ticker fetch using spider service
-        if source.lower() == "asx":
-            # Use your spider service method for ASX by ticker
-            year = str(datetime.now().year)
-            await self.spider_service.crawl_asx_info([ticker], year)
-
-            # Get count using repository
-            with self.db_manager.session() as session:
-                asx_repo = AsxInfoRepository(session)
-                ticker_records = asx_repo.get_by_asx_code(ticker)
-                count = len(ticker_records)
-        else:
-            count = 0  # Other sources don't support ticker search
-
-        return {"count": count, "source": source, "ticker": ticker}
-
-    def _handle_daily_update_complete(self, results: Dict[str, Any]):
-        """Handle daily update completion"""
-        # Update last update times
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        for source in ["asx", "vanguard", "betashares"]:
-            self.last_update_times[source] = now
-            label = self.findChild(BodyLabel, f"{source}_update_label")
-            if label:
-                label.setText(f"Last Update: {now}")
-
-        # Refresh database info
-        self._populate_db_info()
-
-        # Show summary
-        total = sum(r["count"] for r in results.values())
-        errors = sum(len(r["errors"]) for r in results.values())
-
-        if errors > 0:
-            signalBus.infoBarSignal.emit("WARNING", "Daily Update Complete",
-                                         f"Fetched {total} records with {errors} errors")
-        else:
-            signalBus.infoBarSignal.emit("SUCCESS", "Daily Update Complete",
-                                         f"Successfully fetched {total} records")
-
-    def _handle_fetch_complete(self, result: Dict[str, Any]):
-        """Handle single fetch completion"""
-        count = result.get("count", 0)
-        source = result.get("source", "")
-
-        # Refresh database info and update times
-        self._populate_db_info()
-        self._load_update_times()
-
-        signalBus.infoBarSignal.emit("SUCCESS", "Fetch Complete",
-                                     f"Fetched {count} records from {source}")
-
-    def _handle_operation_error(self, error_message: str):
-        """Handle operation error"""
-        signalBus.infoBarSignal.emit("ERROR", "Operation Failed", error_message)
-        signalBus.spiderLogSignal.emit(f"ERROR: {error_message}")
-
-    def _on_progress(self, value: int, message: str):
-        """Handle progress update"""
-        self.progress_bar.setValue(value)
-        self.progress_label.setText(message)
-
-    def _on_log_message(self, message: str):
-        """Add message to log output"""
+    def logActivity(self, message: str, level: str = "INFO"):
+        """Log activity to the log widget"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_output.append(f"[{timestamp}] {message}")
+        color_map = {
+            "INFO": "#d4d4d4",
+            "SUCCESS": "#4ec9b0",
+            "WARNING": "#ce9178",
+            "ERROR": "#f48771"
+        }
+        color = color_map.get(level, "#d4d4d4")
 
-    def refresh(self):
-        """Refresh the view"""
-        self._load_update_times()
-        self._populate_db_info()
-        signalBus.infoBarSignal.emit("SUCCESS", "Refresh Complete", "Spider view refreshed")
+        html = f'<span style="color: #808080">[{timestamp}]</span> <span style="color: {color}">{message}</span>'
+        self.logTextEdit.append(html)
+
+        # Auto scroll to bottom
+        scrollbar = self.logTextEdit.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    @asyncSlot()
+    @raise_error_bar_in_class
+    async def onDailyFetch(self):
+        """Handle daily data fetch"""
+        try:
+            self.dailyFetchBtn.setEnabled(False)
+            self.dailyProgress.setVisible(True)
+
+            is_today = self.dailyComboBox.currentIndex() == 0
+            date_str = "today" if is_today else "previous business day"
+
+            self.logActivity(f"Fetching ASX announcements for {date_str}...")
+
+            # Fetch announcements
+            from spiders.asx_spider import AsxSpider
+            spider = AsxSpider()
+            announcements = await spider.fetch_announcements_by_day(is_today)
+
+            if not announcements:
+                self.logActivity(f"No announcements found for {date_str}", "WARNING")
+                signalBus.infoBarSignal.emit("WARNING", "No Data", f"No announcements found for {date_str}")
+                return
+
+            # Save to database
+            saved_count = 0
+            duplicate_count = 0
+
+            with self.db_manager.session() as session:
+                repo = AsxInfoRepository(session)
+
+                for item in announcements:
+                    if not repo.find_duplicate(item["asx_code"], item["title"], item["pub_date"]):
+                        repo.create(
+                            asx_code=item["asx_code"],
+                            title=item["title"],
+                            pub_date=item["pub_date"],
+                            pdf_mask_url=item["pdf_mask_url"],
+                            page_num=item["page_num"],
+                            file_size=item["file_size"],
+                            update_user=USERNAME
+                        )
+                        saved_count += 1
+                    else:
+                        duplicate_count += 1
+
+            self.logActivity(
+                f"Fetched {len(announcements)} announcements: {saved_count} new, {duplicate_count} duplicates",
+                "SUCCESS")
+            signalBus.infoBarSignal.emit("SUCCESS", "Fetch Complete",
+                                         f"Saved {saved_count} new announcements, skipped {duplicate_count} duplicates")
+
+            # Refresh status
+            self.refreshDataSourceStatus()
+
+        except Exception as e:
+            self.logActivity(f"Error fetching daily data: {str(e)}", "ERROR")
+            raise
+        finally:
+            self.dailyFetchBtn.setEnabled(True)
+            self.dailyProgress.setVisible(False)
+
+    @asyncSlot()
+    @raise_error_bar_in_class
+    async def onTickerFetch(self):
+        """Handle specific ticker fetch"""
+        try:
+            asx_code = self.asxCodeEdit.text().strip().upper()
+            year = str(self.yearSpinBox.value())
+
+            if not asx_code:
+                signalBus.infoBarSignal.emit("WARNING", "Input Required", "Please enter an ASX code")
+                return
+
+            self.tickerFetchBtn.setEnabled(False)
+            self.tickerProgress.setVisible(True)
+
+            self.logActivity(f"Fetching announcements for {asx_code} in {year}...")
+
+            # Fetch announcements
+            await self.spider_service.crawl_asx_info([asx_code], year)
+
+            # Count results
+            with self.db_manager.session() as session:
+                repo = AsxInfoRepository(session)
+                count = len(repo.get_by_asx_code(asx_code))
+
+            self.logActivity(f"Successfully fetched announcements for {asx_code}", "SUCCESS")
+            signalBus.infoBarSignal.emit("SUCCESS", "Fetch Complete",
+                                         f"Fetched announcements for {asx_code} ({count} total records)")
+
+            # Refresh status
+            self.refreshDataSourceStatus()
+
+        except Exception as e:
+            self.logActivity(f"Error fetching ticker data: {str(e)}", "ERROR")
+            raise
+        finally:
+            self.tickerFetchBtn.setEnabled(True)
+            self.tickerProgress.setVisible(False)
+
+    @asyncSlot()
+    @raise_error_bar_in_class
+    async def onBatchUpdate(self):
+        """Handle batch update for all sources"""
+        try:
+            self.batchUpdateBtn.setEnabled(False)
+            self.batchProgress.setVisible(True)
+            self.batchStatusLabel.setText("Running daily spider process...")
+
+            self.logActivity("Starting daily spider process...")
+
+            # Fetch previous business day ASX data
+            self.logActivity("Fetching ASX previous business day announcements...")
+            from spiders.asx_spider import AsxSpider
+            spider = AsxSpider()
+            announcements = await spider.fetch_announcements_by_day(is_today=False)
+
+            saved_count = 0
+            duplicate_count = 0
+            with self.db_manager.session() as session:
+                repo = AsxInfoRepository(session)
+                for item in announcements:
+                    # Ensure pub_date is a date object
+                    pub_date = item["pub_date"]
+                    if isinstance(pub_date, datetime):
+                        pub_date = pub_date.date()
+
+                    record, is_new = repo.create_if_not_exists(
+                        asx_code=item["asx_code"],
+                        title=item["title"],
+                        pub_date=pub_date,
+                        pdf_mask_url=item.get("pdf_mask_url"),
+                        page_num=item.get("page_num", 0),
+                        file_size=item.get("file_size", ""),
+                        update_user=USERNAME
+                    )
+
+                    if is_new:
+                        saved_count += 1
+                    else:
+                        duplicate_count += 1
+
+            self.logActivity(f"ASX: Saved {saved_count} new announcements, {duplicate_count} duplicates", "SUCCESS")
+
+            # TODO: Add Vanguard, BetaShares, iShares updates here
+            self.logActivity("Vanguard update: Not implemented yet", "WARNING")
+            self.logActivity("BetaShares update: Not implemented yet", "WARNING")
+
+            self.batchStatusLabel.setText("Daily spider process completed")
+            self.logActivity("Daily spider process completed successfully", "SUCCESS")
+            signalBus.infoBarSignal.emit("SUCCESS", "Update Complete", "Daily spider process completed successfully")
+
+            # Refresh status
+            self.refreshDataSourceStatus()
+
+        except Exception as e:
+            self.batchStatusLabel.setText("Daily spider process failed")
+            self.logActivity(f"Error in batch update: {str(e)}", "ERROR")
+            raise
+        finally:
+            self.batchUpdateBtn.setEnabled(True)
+            self.batchProgress.setVisible(False)
+
+    @asyncSlot()
+    @raise_error_bar_in_class
+    async def onSyncUrls(self):
+        """Sync PDF URLs for announcements"""
+        try:
+            self.syncUrlBtn.setEnabled(False)
+            self.batchProgress.setVisible(True)
+
+            self.logActivity("Syncing PDF URLs...")
+
+            # Get announcements that need URL sync
+            with self.db_manager.session() as session:
+                repo = AsxInfoRepository(session)
+                records = session.query(AsxInfo).filter(
+                    AsxInfo.pdf_mask_url.isnot(None),
+                    AsxInfo.pdf_url.is_(None)
+                ).limit(20).all()  # Limit to prevent overwhelming
+
+                asx_codes = list(set([r.asx_code for r in records]))
+
+            if not asx_codes:
+                self.logActivity("No URLs to sync", "INFO")
+                signalBus.infoBarSignal.emit("INFO", "No URLs to Sync", "All PDF URLs are already synced")
+                return
+
+            self.logActivity(f"Syncing URLs for {len(records)} announcements...")
+
+            # Sync URLs
+            await self.spider_service.sync_asx_act_url(asx_codes)
+
+            self.logActivity(f"Successfully synced {len(records)} PDF URLs", "SUCCESS")
+            signalBus.infoBarSignal.emit("SUCCESS", "Sync Complete", f"Synced {len(records)} PDF URLs")
+
+        except Exception as e:
+            self.logActivity(f"Error syncing URLs: {str(e)}", "ERROR")
+            raise
+        finally:
+            self.syncUrlBtn.setEnabled(True)
+            self.batchProgress.setVisible(False)
+
+    def refreshDataSourceStatus(self):
+        """Refresh data source status cards"""
+        try:
+            with self.db_manager.session() as session:
+                repo = AsxInfoRepository(session)
+
+                # Get ASX status
+                asx_count = repo.count()
+                asx_latest = session.query(AsxInfo.update_timestamp) \
+                    .order_by(AsxInfo.update_timestamp.desc()) \
+                    .first()
+
+                self.asxCard.updateStatus(
+                    asx_latest[0] if asx_latest else None,
+                    asx_count
+                )
+
+                # TODO: Update other cards when their repositories are implemented
+                self.vanguardCard.updateStatus(None, 0)
+                self.betasharesCard.updateStatus(None, 0)
+                self.isharesCard.updateStatus(None, 0)
+
+        except Exception as e:
+            logger.error(f"Error refreshing status: {e}")
+
+    def updateProgress(self, source: str, current: int, total: int):
+        """Update progress for ongoing operations"""
+        percent = int((current / total) * 100) if total > 0 else 0
+        self.logActivity(f"{source}: {current}/{total} ({percent}%)", "INFO")
+
+    def closeEvent(self, event):
+        """Clean up resources on close"""
+        if self.db_manager:
+            self.db_manager.close()
+        super().closeEvent(event)

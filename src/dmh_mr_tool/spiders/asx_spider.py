@@ -7,11 +7,11 @@ from lxml import etree
 from urllib.parse import urljoin
 from config.settings import CONFIG
 
-ASX_COOKIE_URL = ""
-ASX_BASE_URL = ""
-ASX_SEARCH_URL = ""
-ASX_TODAY_URL = ""
-ASX_PRE_DAY_URL = ""
+ASX_COOKIE_URL = "https://www.asx.com.au/markets/trade-our-cash-market/historical-announcements"
+ASX_BASE_URL = "https://www.asx.com.au/asx/v2/statistics"
+ASX_SEARCH_URL = f"{ASX_BASE_URL}/announcements.do"
+ASX_TODAY_URL = f"{ASX_BASE_URL}/todayAnns.do"
+ASX_PRE_DAY_URL = f"{ASX_BASE_URL}/prevBusDayAnns.do"
 PROXY = "http://127.0.0.1:7890"
 MAX_RETRIES = 3
 
@@ -85,6 +85,35 @@ class AsxSpider:
                         "pdf_mask_url": pdf_mask_url,
                     })
         return result
+
+    async def download_pdf(self, pdf_url: str, save_path: str) -> None:
+        retries = 0
+        last_exception = None
+
+        while retries < MAX_RETRIES:
+            try:
+                async with self.semaphore:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(pdf_url, proxy=PROXY) as resp:
+                            if resp.status == 200:
+                                with open(save_path, 'wb') as f:
+                                    while True:
+                                        chunk = await resp.content.read(1024)
+                                        if not chunk:
+                                            break
+                                        f.write(chunk)
+                                return
+                            else:
+                                retries += 1
+                                await asyncio.sleep(2 ** retries)
+            except Exception as e:
+                last_exception = e
+                retries += 1
+                await asyncio.sleep(2 ** retries)
+
+        raise Exception(
+            f"Failed to download {pdf_url} after {MAX_RETRIES} attempts. Last exception: {last_exception}"
+        )
 
     async def get_pdf_actual_url(self, mask_url: str) -> str:
         async with self.semaphore:

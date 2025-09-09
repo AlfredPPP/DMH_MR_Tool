@@ -45,7 +45,7 @@ def createErrorInfoBar(self, content, title="Unknown Error"):
 
 
 def createWarningInfoBar(self, title, content):
-    InfoBar.error(
+    InfoBar.warning(
         title=title,
         content=content,
         orient=Qt.Horizontal,
@@ -57,7 +57,7 @@ def createWarningInfoBar(self, title, content):
 
 
 def createSuccessInfoBar(self, title, content):
-    InfoBar.error(
+    InfoBar.success(
         title=title,
         content=content,
         orient=Qt.Horizontal,
