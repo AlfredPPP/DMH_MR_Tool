@@ -2,18 +2,17 @@
 """Spider Interface for fetching and managing announcement data"""
 
 import asyncio
-from datetime import datetime, timedelta
-from typing import Optional, List
+from datetime import datetime
+from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTextEdit, QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit
 )
 from qfluentwidgets import (
-    LineEdit, ComboBox, PushButton, PrimaryPushButton,
-    ProgressRing, TableWidget, CardWidget, StrongBodyLabel,
-    BodyLabel, CaptionLabel, InfoBar, InfoBarPosition,
+    LineEdit, ComboBox, PrimaryPushButton,
+    ProgressRing, CardWidget, StrongBodyLabel,
+    BodyLabel, CaptionLabel, PushButton,
     SpinBox, FluentIcon as FIF, IndeterminateProgressRing
 )
 from qasync import asyncSlot
@@ -22,11 +21,7 @@ from ..views.base_view import BaseInterface, SeparatorWidget
 from ui.utils.signal_bus import signalBus
 from ui.utils.infobar import raise_error_bar_in_class
 from business.services.spider_service import SpiderService
-from database.connection import DatabaseManager
-from database.repositories.asx_repository import AsxInfoRepository
-from database.models import AsxInfo
 from config.settings import CONFIG
-from core.utils import USERNAME
 
 import structlog
 
@@ -78,21 +73,18 @@ class SpiderInterface(BaseInterface):
             subtitle="Fetch and manage announcement data from various sources",
             parent=parent
         )
-        self.setObjectName('dbBrowserInterface')
-        self.db_manager = None
+        self.setObjectName('spiderInterface')
         self.spider_service = None
         self.initUI()
-        self.initDatabase()
+        self.initService()
         self.connectSignalToSlot()
 
         # Auto refresh status on load
         QTimer.singleShot(100, self.refreshDataSourceStatus)
 
-    def initDatabase(self):
-        """Initialize database manager and spider service"""
-        self.db_manager = DatabaseManager(CONFIG.database)
-        self.db_manager.initialize()
-        self.spider_service = SpiderService(self.db_manager)
+    def initService(self):
+        """Initialize spider service"""
+        self.spider_service = SpiderService()
 
     def initUI(self):
         """Initialize the user interface"""
@@ -319,43 +311,21 @@ class SpiderInterface(BaseInterface):
 
             self.logActivity(f"Fetching ASX announcements for {date_str}...")
 
-            # Fetch announcements
-            from spiders.asx_spider import AsxSpider
-            spider = AsxSpider()
-            announcements = await spider.fetch_announcements_by_day(is_today)
+            # Call service method - let service handle all database operations
+            result = await self.spider_service.fetch_daily_announcements(is_today)
 
-            if not announcements:
+            if result["total"] == 0:
                 self.logActivity(f"No announcements found for {date_str}", "WARNING")
                 signalBus.infoBarSignal.emit("WARNING", "No Data", f"No announcements found for {date_str}")
-                return
-
-            # Save to database
-            saved_count = 0
-            duplicate_count = 0
-
-            with self.db_manager.session() as session:
-                repo = AsxInfoRepository(session)
-
-                for item in announcements:
-                    if not repo.find_duplicate(item["asx_code"], item["title"], item["pub_date"]):
-                        repo.create(
-                            asx_code=item["asx_code"],
-                            title=item["title"],
-                            pub_date=item["pub_date"],
-                            pdf_mask_url=item["pdf_mask_url"],
-                            page_num=item["page_num"],
-                            file_size=item["file_size"],
-                            update_user=USERNAME
-                        )
-                        saved_count += 1
-                    else:
-                        duplicate_count += 1
-
-            self.logActivity(
-                f"Fetched {len(announcements)} announcements: {saved_count} new, {duplicate_count} duplicates",
-                "SUCCESS")
-            signalBus.infoBarSignal.emit("SUCCESS", "Fetch Complete",
-                                         f"Saved {saved_count} new announcements, skipped {duplicate_count} duplicates")
+            else:
+                self.logActivity(
+                    f"Fetched {result['total']} announcements: {result['saved']} new, {result['duplicates']} duplicates",
+                    "SUCCESS"
+                )
+                signalBus.infoBarSignal.emit(
+                    "SUCCESS", "Fetch Complete",
+                    f"Saved {result['saved']} new announcements, skipped {result['duplicates']} duplicates"
+                )
 
             # Refresh status
             self.refreshDataSourceStatus()
@@ -384,17 +354,17 @@ class SpiderInterface(BaseInterface):
 
             self.logActivity(f"Fetching announcements for {asx_code} in {year}...")
 
-            # Fetch announcements
-            await self.spider_service.crawl_asx_info([asx_code], year)
+            # Call service method
+            result = await self.spider_service.crawl_asx_info([asx_code], year)
 
-            # Count results
-            with self.db_manager.session() as session:
-                repo = AsxInfoRepository(session)
-                count = len(repo.get_by_asx_code(asx_code))
-
-            self.logActivity(f"Successfully fetched announcements for {asx_code}", "SUCCESS")
-            signalBus.infoBarSignal.emit("SUCCESS", "Fetch Complete",
-                                         f"Fetched announcements for {asx_code} ({count} total records)")
+            self.logActivity(
+                f"Successfully fetched {result['total']} announcements for {asx_code}",
+                "SUCCESS"
+            )
+            signalBus.infoBarSignal.emit(
+                "SUCCESS", "Fetch Complete",
+                f"Fetched announcements for {asx_code} ({result['saved']} new, {result['duplicates']} duplicates)"
+            )
 
             # Refresh status
             self.refreshDataSourceStatus()
@@ -417,42 +387,19 @@ class SpiderInterface(BaseInterface):
 
             self.logActivity("Starting daily spider process...")
 
-            # Fetch previous business day ASX data
-            self.logActivity("Fetching ASX previous business day announcements...")
-            from spiders.asx_spider import AsxSpider
-            spider = AsxSpider()
-            announcements = await spider.fetch_announcements_by_day(is_today=False)
+            # Call service method for complete daily spider
+            results = await self.spider_service.run_daily_spider()
 
-            saved_count = 0
-            duplicate_count = 0
-            with self.db_manager.session() as session:
-                repo = AsxInfoRepository(session)
-                for item in announcements:
-                    # Ensure pub_date is a date object
-                    pub_date = item["pub_date"]
-                    if isinstance(pub_date, datetime):
-                        pub_date = pub_date.date()
-
-                    record, is_new = repo.create_if_not_exists(
-                        asx_code=item["asx_code"],
-                        title=item["title"],
-                        pub_date=pub_date,
-                        pdf_mask_url=item.get("pdf_mask_url"),
-                        page_num=item.get("page_num", 0),
-                        file_size=item.get("file_size", ""),
-                        update_user=USERNAME
+            # Log results for each source
+            for source, result in results.items():
+                if result:
+                    self.logActivity(
+                        f"{source.upper()}: Saved {result.get('saved', 0)} new, "
+                        f"{result.get('duplicates', 0)} duplicates",
+                        "SUCCESS" if result.get('saved', 0) > 0 else "INFO"
                     )
-
-                    if is_new:
-                        saved_count += 1
-                    else:
-                        duplicate_count += 1
-
-            self.logActivity(f"ASX: Saved {saved_count} new announcements, {duplicate_count} duplicates", "SUCCESS")
-
-            # TODO: Add Vanguard, BetaShares, iShares updates here
-            self.logActivity("Vanguard update: Not implemented yet", "WARNING")
-            self.logActivity("BetaShares update: Not implemented yet", "WARNING")
+                else:
+                    self.logActivity(f"{source.upper()}: Not implemented yet", "WARNING")
 
             self.batchStatusLabel.setText("Daily spider process completed")
             self.logActivity("Daily spider process completed successfully", "SUCCESS")
@@ -479,28 +426,15 @@ class SpiderInterface(BaseInterface):
 
             self.logActivity("Syncing PDF URLs...")
 
-            # Get announcements that need URL sync
-            with self.db_manager.session() as session:
-                repo = AsxInfoRepository(session)
-                records = session.query(AsxInfo).filter(
-                    AsxInfo.pdf_mask_url.isnot(None),
-                    AsxInfo.pdf_url.is_(None)
-                ).limit(20).all()  # Limit to prevent overwhelming
+            # Call service method
+            synced_count = await self.spider_service.sync_pdf_urls(limit=20)
 
-                asx_codes = list(set([r.asx_code for r in records]))
-
-            if not asx_codes:
+            if synced_count == 0:
                 self.logActivity("No URLs to sync", "INFO")
                 signalBus.infoBarSignal.emit("INFO", "No URLs to Sync", "All PDF URLs are already synced")
-                return
-
-            self.logActivity(f"Syncing URLs for {len(records)} announcements...")
-
-            # Sync URLs
-            await self.spider_service.sync_asx_act_url(asx_codes)
-
-            self.logActivity(f"Successfully synced {len(records)} PDF URLs", "SUCCESS")
-            signalBus.infoBarSignal.emit("SUCCESS", "Sync Complete", f"Synced {len(records)} PDF URLs")
+            else:
+                self.logActivity(f"Successfully synced {synced_count} PDF URLs", "SUCCESS")
+                signalBus.infoBarSignal.emit("SUCCESS", "Sync Complete", f"Synced {synced_count} PDF URLs")
 
         except Exception as e:
             self.logActivity(f"Error syncing URLs: {str(e)}", "ERROR")
@@ -512,24 +446,14 @@ class SpiderInterface(BaseInterface):
     def refreshDataSourceStatus(self):
         """Refresh data source status cards"""
         try:
-            with self.db_manager.session() as session:
-                repo = AsxInfoRepository(session)
+            # Get status from service
+            status = self.spider_service.get_data_source_status()
 
-                # Get ASX status
-                asx_count = repo.count()
-                asx_latest = session.query(AsxInfo.update_timestamp) \
-                    .order_by(AsxInfo.update_timestamp.desc()) \
-                    .first()
-
-                self.asxCard.updateStatus(
-                    asx_latest[0] if asx_latest else None,
-                    asx_count
-                )
-
-                # TODO: Update other cards when their repositories are implemented
-                self.vanguardCard.updateStatus(None, 0)
-                self.betasharesCard.updateStatus(None, 0)
-                self.isharesCard.updateStatus(None, 0)
+            # Update cards
+            self.asxCard.updateStatus(status["asx"]["last_update"], status["asx"]["count"])
+            self.vanguardCard.updateStatus(status["vanguard"]["last_update"], status["vanguard"]["count"])
+            self.betasharesCard.updateStatus(status["betashares"]["last_update"], status["betashares"]["count"])
+            self.isharesCard.updateStatus(status["ishares"]["last_update"], status["ishares"]["count"])
 
         except Exception as e:
             logger.error(f"Error refreshing status: {e}")
@@ -538,9 +462,3 @@ class SpiderInterface(BaseInterface):
         """Update progress for ongoing operations"""
         percent = int((current / total) * 100) if total > 0 else 0
         self.logActivity(f"{source}: {current}/{total} ({percent}%)", "INFO")
-
-    def closeEvent(self, event):
-        """Clean up resources on close"""
-        if self.db_manager:
-            self.db_manager.close()
-        super().closeEvent(event)
