@@ -5,6 +5,7 @@ import shutil
 target_files = {
     "dmh_service.py",
     "spider_service.py",
+    "parser_service.py",
     "settings.py",
     "utils.py",
     "connection.py",
@@ -17,6 +18,8 @@ target_files = {
     "signal_bus.py",
     "base_view.py",
     "spider_view.py",
+    "parser_view.py",
+    "mr_update_view.py",
     "main.py",
     # 特殊情况：带子路径
     os.path.join("utils", "config.py"),

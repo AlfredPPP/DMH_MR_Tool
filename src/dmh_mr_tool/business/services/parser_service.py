@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-import fitz  # PyMuPDF
+import pdfplumber  # PyMuPDF
 import pandas as pd
 import openpyxl
 
@@ -165,16 +165,12 @@ class ParserService:
         results = {}
 
         try:
-            # Open PDF
-            pdf_document = fitz.open(str(file_path))
-
-            # Extract text from all pages
             full_text = ""
-            for page_num in range(pdf_document.page_count):
-                page = pdf_document[page_num]
-                full_text += page.get_text()
-
-            pdf_document.close()
+            with pdfplumber.open(str(file_path)) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        full_text += page_text + "\n"
 
             # Apply regex patterns from template
             for field_name, pattern in template_data.items():
