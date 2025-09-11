@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QDialog, QDialogButtonBox, QFormLayout,
-    QFileDialog
+    QFileDialog, QComboBox, QTextEdit, QLineEdit,
+    QMessageBox
 )
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from qfluentwidgets import (
@@ -24,7 +25,7 @@ from qasync import asyncSlot
 
 from ..views.base_view import BaseInterface, SeparatorWidget
 from ui.utils.signal_bus import signalBus
-from ui.utils.infobar import raise_error_bar_in_class, createWarningInfoBar, createSuccessInfoBar
+from ui.utils.infobar import raise_error_bar_in_class, createWarningInfoBar, createSuccessInfoBar, createErrorInfoBar
 from business.services.parser_service import ParserService
 from database.models import ParseTemplateMR, ParseTemplateNZ
 from config.settings import CONFIG
@@ -50,7 +51,7 @@ class DragDropArea(CardWidget):
         layout.setSpacing(20)
 
         # Icon
-        icon_label = QLabel("📁", self)
+        icon_label = QLabel("📄", self)
         icon_label.setStyleSheet("font-size: 48px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -71,17 +72,17 @@ class DragDropArea(CardWidget):
         layout.addWidget(sub_label)
         layout.addWidget(self.browseBtn)
 
-        # Styling
+        # Styling - Google-like gray drop area
         self.setStyleSheet("""
             DragDropArea {
-                background-color: #f0f0f0;
-                border: 2px dashed #999;
+                background-color: #f5f5f5;
+                border: 2px dashed #dadce0;
                 border-radius: 8px;
                 min-height: 200px;
             }
             DragDropArea:hover {
-                background-color: #e8e8e8;
-                border-color: #666;
+                background-color: #f1f3f4;
+                border-color: #5f6368;
             }
         """)
 
@@ -90,8 +91,8 @@ class DragDropArea(CardWidget):
             event.acceptProposedAction()
             self.setStyleSheet("""
                 DragDropArea {
-                    background-color: #e0f0ff;
-                    border: 2px dashed #0078d4;
+                    background-color: #e8f0fe;
+                    border: 2px dashed #1a73e8;
                     border-radius: 8px;
                     min-height: 200px;
                 }
@@ -100,8 +101,8 @@ class DragDropArea(CardWidget):
     def dragLeaveEvent(self, event):
         self.setStyleSheet("""
             DragDropArea {
-                background-color: #f0f0f0;
-                border: 2px dashed #999;
+                background-color: #f5f5f5;
+                border: 2px dashed #dadce0;
                 border-radius: 8px;
                 min-height: 200px;
             }
@@ -124,13 +125,50 @@ class DragDropArea(CardWidget):
             self.fileDropped.emit(file_path)
 
 
+class EditablePatternDelegate(QWidget):
+    """Widget for editing regex patterns in table cells"""
+
+    patternChanged = Signal(str)
+
+    def __init__(self, initial_pattern="", parent=None):
+        super().__init__(parent)
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+        self.edit = QLineEdit(initial_pattern)
+        self.edit.setToolTip("Double-click to edit pattern")
+        self.edit.editingFinished.connect(self.onEditingFinished)
+        self.layout.addWidget(self.edit)
+
+        # Initially read-only, double-click to edit
+        self.edit.setReadOnly(True)
+        self.edit.mouseDoubleClickEvent = self.enableEdit
+
+    def enableEdit(self, event):
+        self.edit.setReadOnly(False)
+        self.edit.selectAll()
+        self.edit.setFocus()
+
+    def onEditingFinished(self):
+        self.edit.setReadOnly(True)
+        self.patternChanged.emit(self.edit.text())
+
+    def getPattern(self):
+        return self.edit.text()
+
+
 class ParseResultTable(TableWidget):
     """Table widget for displaying parse results"""
+
+    patternChanged = Signal(int, str)  # row, new_pattern
+    rowDeleted = Signal(int)  # row
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setupUI()
         self.hidden_rows = []  # Track which rows are hidden due to None values
+        self.pattern_widgets = {}  # Track pattern edit widgets
+        self.deleted_rows = set()  # Track deleted rows
 
     def setupUI(self):
         # Set headers
@@ -140,7 +178,7 @@ class ParseResultTable(TableWidget):
         # Configure table
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -150,6 +188,8 @@ class ParseResultTable(TableWidget):
         self.clear()
         self.setRowCount(0)
         self.hidden_rows.clear()
+        self.pattern_widgets.clear()
+        self.deleted_rows.clear()
 
         # Add all columns from column_map
         row_index = 0
@@ -158,15 +198,17 @@ class ParseResultTable(TableWidget):
 
             # Column name
             name_item = QTableWidgetItem(field_data.get('d_desc', field_name))
+            name_item.setData(Qt.ItemDataRole.UserRole, field_name)  # Store field name
             name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.setItem(row_index, 0, name_item)
 
-            # Pattern
+            # Pattern (editable via double-click)
             pattern = template_data.get(field_name, '')
-            pattern_item = QTableWidgetItem(pattern[:50] + '...' if len(pattern) > 50 else pattern)
-            pattern_item.setToolTip(pattern)
-            pattern_item.setFlags(pattern_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.setItem(row_index, 1, pattern_item)
+            pattern_widget = EditablePatternDelegate(pattern[:50] + '...' if len(pattern) > 50 else pattern)
+            pattern_widget.setToolTip(pattern)
+            pattern_widget.patternChanged.connect(lambda p, r=row_index: self.onPatternChanged(r, p))
+            self.setCellWidget(row_index, 1, pattern_widget)
+            self.pattern_widgets[row_index] = pattern_widget
 
             # Value (editable)
             value = field_data.get('value', '')
@@ -176,6 +218,7 @@ class ParseResultTable(TableWidget):
             # Comment
             comment = field_data.get('comment', '')
             comment_item = QTableWidgetItem(comment)
+            comment_item.setFlags(comment_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.setItem(row_index, 3, comment_item)
 
             # Hide row if value is None
@@ -185,24 +228,120 @@ class ParseResultTable(TableWidget):
 
             row_index += 1
 
+    def onPatternChanged(self, row: int, new_pattern: str):
+        """Handle pattern change"""
+        self.patternChanged.emit(row, new_pattern)
+
     def showHiddenRows(self, show: bool):
         """Show or hide rows with None values"""
         for row in self.hidden_rows:
-            if show:
-                self.showRow(row)
-            else:
-                self.hideRow(row)
+            if row not in self.deleted_rows:
+                if show:
+                    self.showRow(row)
+                else:
+                    self.hideRow(row)
+
+    def deleteSelectedRow(self):
+        """Delete the currently selected row"""
+        current_row = self.currentRow()
+        if current_row >= 0:
+            # Clear value and hide row
+            self.item(current_row, 2).setText('')
+            self.hideRow(current_row)
+            self.deleted_rows.add(current_row)
+            self.rowDeleted.emit(current_row)
+            return True
+        return False
+
+    def addNewRow(self, field_name: str, field_desc: str):
+        """Add a new row for a field"""
+        row_index = self.rowCount()
+        self.insertRow(row_index)
+
+        # Column name
+        name_item = QTableWidgetItem(field_desc)
+        name_item.setData(Qt.ItemDataRole.UserRole, field_name)
+        name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.setItem(row_index, 0, name_item)
+
+        # Pattern (empty, editable)
+        pattern_widget = EditablePatternDelegate("")
+        pattern_widget.patternChanged.connect(lambda p, r=row_index: self.onPatternChanged(r, p))
+        self.setCellWidget(row_index, 1, pattern_widget)
+        self.pattern_widgets[row_index] = pattern_widget
+
+        # Value (editable)
+        value_item = QTableWidgetItem("")
+        self.setItem(row_index, 2, value_item)
+
+        # Comment
+        comment_item = QTableWidgetItem("Manually added")
+        comment_item.setFlags(comment_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.setItem(row_index, 3, comment_item)
 
     def getValues(self) -> Dict[str, Any]:
         """Get all values from the table"""
         values = {}
         for row in range(self.rowCount()):
-            if not self.isRowHidden(row):
-                col_name = self.item(row, 0).text() if self.item(row, 0) else ''
-                value = self.item(row, 2).text() if self.item(row, 2) else ''
-                if value:  # Only include non-empty values
-                    values[col_name] = value
+            if not self.isRowHidden(row) and row not in self.deleted_rows:
+                name_item = self.item(row, 0)
+                if name_item:
+                    field_name = name_item.data(Qt.ItemDataRole.UserRole) or name_item.text()
+                    value = self.item(row, 2).text() if self.item(row, 2) else ''
+                    if value:  # Only include non-empty values
+                        values[field_name] = value
         return values
+
+    def getPatterns(self) -> Dict[str, str]:
+        """Get all patterns from the table"""
+        patterns = {}
+        for row in range(self.rowCount()):
+            if row not in self.deleted_rows:
+                name_item = self.item(row, 0)
+                if name_item and row in self.pattern_widgets:
+                    field_name = name_item.data(Qt.ItemDataRole.UserRole) or name_item.text()
+                    pattern = self.pattern_widgets[row].getPattern()
+                    if pattern:
+                        patterns[field_name] = pattern
+        return patterns
+
+
+class AddFieldDialog(QDialog):
+    """Dialog for adding a new field"""
+
+    def __init__(self, available_fields: List[tuple], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Field")
+        self.setModal(True)
+        self.setupUI(available_fields)
+
+    def setupUI(self, available_fields):
+        layout = QVBoxLayout(self)
+
+        # Field selection
+        form = QFormLayout()
+        self.fieldCombo = QComboBox(self)
+        for field_name, field_desc in available_fields:
+            self.fieldCombo.addItem(field_desc, field_name)
+        form.addRow("Select Field:", self.fieldCombo)
+
+        layout.addLayout(form)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            self
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def getSelectedField(self) -> tuple:
+        """Get selected field (name, description)"""
+        return (
+            self.fieldCombo.currentData(),
+            self.fieldCombo.currentText()
+        )
 
 
 class HeaderDialog(QDialog):
@@ -294,6 +433,7 @@ class ParserInterface(BaseInterface):
         self.setObjectName('parserInterface')
         self.parser_service = ParserService()
         self.current_file_path = None
+        self.current_file_content = None  # Store file content for re-parsing
         self.current_template = None
         self.parse_results = {}
         self.initUI()
@@ -368,6 +508,8 @@ class ParserInterface(BaseInterface):
         # Table widget
         self.resultsTable = ParseResultTable(self)
         self.resultsTable.setMinimumHeight(300)
+        self.resultsTable.patternChanged.connect(self.onPatternChanged)
+        self.resultsTable.rowDeleted.connect(self.onRowDeleted)
 
         # Show hidden rows checkbox
         self.showHiddenCheck = CheckBox("Show empty fields", self)
@@ -378,10 +520,16 @@ class ParserInterface(BaseInterface):
         self.addRowBtn.setIcon(FIF.ADD)
         self.addRowBtn.clicked.connect(self.onAddRow)
 
+        # Delete row button
+        self.deleteRowBtn = PushButton("Delete Selected", self)
+        self.deleteRowBtn.setIcon(FIF.DELETE)
+        self.deleteRowBtn.clicked.connect(self.onDeleteRow)
+
         controls = QWidget()
         layout = QHBoxLayout(controls)
         layout.addWidget(self.showHiddenCheck)
         layout.addWidget(self.addRowBtn)
+        layout.addWidget(self.deleteRowBtn)
         layout.addStretch()
 
         title = StrongBodyLabel("Parse Results")
@@ -471,14 +619,11 @@ class ParserInterface(BaseInterface):
         self.parseBtn.setEnabled(True)
 
         # Auto-select template based on file name
-        file_name = os.path.basename(file_path).lower()
-        if 'vanguard' in file_name:
-            self.templateCombo.setCurrentText('vanguard_au')
-        elif 'asx' in file_name:
-            if 'mit' in file_name:
-                self.templateCombo.setCurrentText('asx_mit_notice')
-            else:
-                self.templateCombo.setCurrentText('asx_dividend')
+        template = self.parser_service.get_template_by_file_pattern(os.path.basename(file_path))
+        if template:
+            index = self.templateCombo.findText(template)
+            if index >= 0:
+                self.templateCombo.setCurrentIndex(index)
 
     @asyncSlot()
     @raise_error_bar_in_class
@@ -519,12 +664,89 @@ class ParserInterface(BaseInterface):
         finally:
             self.parseBtn.setEnabled(True)
 
+    @asyncSlot()
+    async def onPatternChanged(self, row: int, new_pattern: str):
+        """Handle pattern change - re-parse with new pattern"""
+        if not self.current_file_path or not new_pattern:
+            return
+
+        try:
+            # Get field name from row
+            name_item = self.resultsTable.item(row, 0)
+            if not name_item:
+                return
+
+            field_name = name_item.data(Qt.ItemDataRole.UserRole) or name_item.text()
+
+            # Re-parse just this field
+            import pdfplumber
+            full_text = ""
+
+            if self.current_file_path.lower().endswith('.pdf'):
+                with pdfplumber.open(self.current_file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            full_text += page_text + "\n"
+
+            # Apply new pattern
+            try:
+                match = re.search(new_pattern, full_text, re.MULTILINE | re.DOTALL)
+                if match:
+                    value = match.group(1) if match.groups() else match.group(0)
+                    value = value.strip()
+
+                    # Update value in table
+                    self.resultsTable.item(row, 2).setText(str(value))
+
+                    # Update comment
+                    self.resultsTable.item(row, 3).setText("Pattern updated")
+                else:
+                    self.resultsTable.item(row, 2).setText("")
+                    self.resultsTable.item(row, 3).setText("No match found")
+
+            except re.error as e:
+                self.resultsTable.item(row, 3).setText(f"Pattern error: {str(e)}")
+
+        except Exception as e:
+            logger.error(f"Error applying pattern: {e}")
+
+    def onRowDeleted(self, row: int):
+        """Handle row deletion"""
+        logger.info(f"Row {row} deleted")
+
     def onAddRow(self):
         """Add a new row to the results table"""
-        # Show dialog to select field
-        fields = self.parser_service.get_available_fields()
-        # TODO: Implement field selection dialog
-        pass
+        # Get available fields not already in table
+        all_fields = self.parser_service.get_available_fields()
+
+        # Get current fields in table
+        current_fields = set()
+        for row in range(self.resultsTable.rowCount()):
+            name_item = self.resultsTable.item(row, 0)
+            if name_item:
+                current_fields.add(name_item.text())
+
+        # Filter available fields
+        available = [(k, v['d_desc']) for k, v in self.parser_service.column_map_cache.items()
+                     if v['d_desc'] not in current_fields]
+
+        if not available:
+            createWarningInfoBar(self, "No Fields", "All available fields are already in the table")
+            return
+
+        # Show dialog
+        dialog = AddFieldDialog(available, self)
+        if dialog.exec():
+            field_name, field_desc = dialog.getSelectedField()
+            self.resultsTable.addNewRow(field_name, field_desc)
+
+    def onDeleteRow(self):
+        """Delete selected row"""
+        if self.resultsTable.deleteSelectedRow():
+            createSuccessInfoBar(self, "Deleted", "Row deleted successfully")
+        else:
+            createWarningInfoBar(self, "No Selection", "Please select a row to delete")
 
     def onSubmit(self):
         """Submit parsed data to MR Update Interface"""
@@ -532,13 +754,23 @@ class ParserInterface(BaseInterface):
             createWarningInfoBar(self, "No Data", "No parsed data to submit")
             return
 
+        # Get values from table
+        table_values = self.resultsTable.getValues()
+
+        # Validate the data
+        is_valid, errors = self.parser_service.validate_parse_results(
+            {k: {'value': v} for k, v in table_values.items()}
+        )
+
+        if not is_valid:
+            error_msg = "\n".join(errors)
+            createErrorInfoBar(self, error_msg, title="Validation Failed")
+            return
+
         # Show header dialog
         dialog = HeaderDialog(self)
         if dialog.exec():
             header_data = dialog.getValues()
-
-            # Get values from table
-            table_values = self.resultsTable.getValues()
 
             # Prepare submission package
             submission_data = {
@@ -571,8 +803,53 @@ class ParserInterface(BaseInterface):
 
     def onSaveTemplate(self):
         """Save current patterns as a new template"""
-        # TODO: Implement template saving dialog
-        pass
+        # Get template name from user
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save Template")
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+
+        form = QFormLayout()
+
+        # Template name
+        name_edit = QLineEdit(dialog)
+        name_edit.setPlaceholderText("Enter template name")
+        form.addRow("Template Name:", name_edit)
+
+        # Template type
+        type_combo = QComboBox(dialog)
+        type_combo.addItems(["MR Template", "NZ Template"])
+        form.addRow("Template Type:", type_combo)
+
+        layout.addLayout(form)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            dialog
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec():
+            template_name = name_edit.text()
+            is_mr = type_combo.currentIndex() == 0
+
+            if not template_name:
+                createWarningInfoBar(self, "Invalid Name", "Please enter a template name")
+                return
+
+            # Get patterns from table
+            patterns = self.resultsTable.getPatterns()
+
+            # Save template
+            if self.parser_service.save_template(template_name, patterns, is_mr):
+                createSuccessInfoBar(self, "Template Saved", f"Template '{template_name}' saved successfully")
+                self.loadTemplates()  # Reload templates
+            else:
+                createErrorInfoBar(self, "Failed to save template", title="Save Failed")
 
     def onBrowseFolder(self):
         """Browse for folder"""
@@ -603,6 +880,8 @@ class ParserInterface(BaseInterface):
 
             # Process each file
             success_count = 0
+            failed_files = []
+
             for file_path in files:
                 try:
                     results = await self.parser_service.parse_file(
@@ -611,12 +890,29 @@ class ParserInterface(BaseInterface):
                     )
 
                     if results:
+                        # Extract header info from filename if possible
+                        # Format: {Asset_ID}_{Client_ID}_{Ex_Date}_{ACT/EST}
+                        filename = file_path.stem
+                        parts = filename.split('_')
+
+                        header_data = {
+                            'asset_id': parts[0] if len(parts) > 0 else '',
+                            'client_id': parts[1] if len(parts) > 1 else '',
+                            'type': 'Last Actual'  # Hi-Trust UR uses ACT type
+                        }
+
+                        # Try to parse date from filename
+                        if len(parts) > 2:
+                            try:
+                                ex_date = datetime.strptime(parts[2], '%d%b%Y').date()
+                                header_data['ex_date'] = ex_date
+                            except:
+                                pass
+
                         # Auto-submit to MR Update
                         submission_data = {
-                            'header': {
-                                'type': 'ACT'  # Hi-Trust UR uses ACT
-                            },
-                            'data': results,
+                            'header': header_data,
+                            'data': {k: v['value'] for k, v in results.items() if v['value']},
                             'source_file': str(file_path),
                             'template': 'Hi-Trust UR',
                             'timestamp': datetime.now()
@@ -627,12 +923,19 @@ class ParserInterface(BaseInterface):
 
                 except Exception as e:
                     logger.error(f"Failed to process {file_path}: {e}")
+                    failed_files.append(str(file_path.name))
 
-            createSuccessInfoBar(
-                self,
-                "Batch Complete",
-                f"Processed {success_count}/{len(files)} files successfully"
-            )
+            # Show results
+            message = f"Processed {success_count}/{len(files)} files successfully"
+            if failed_files:
+                message += f"\n\nFailed files:\n" + "\n".join(failed_files[:5])
+                if len(failed_files) > 5:
+                    message += f"\n... and {len(failed_files) - 5} more"
+
+            if success_count > 0:
+                createSuccessInfoBar(self, "Batch Complete", message)
+            else:
+                createErrorInfoBar(self, message, title="Batch Failed")
 
         finally:
             self.batchProcessBtn.setEnabled(True)

@@ -129,6 +129,7 @@ create table if not exists asx_nz_data(
     franked_pct numeric(8,8),
     total numeric(8,8),
     unfranked_pct numeric(8,8),
+	unfranked_cfi numeric(8,8),
     supplementary_dividend numeric(8,8),
     tax_rate numeric(8,8),
 );
@@ -221,12 +222,15 @@ create table if not exists parse_template_mr(
 create table if not exists parse_template_nz(
     id integer primary key autoincrement,
     template_name text, -- e.g. asx_dividend, perpetual, etc
+	ex_date TEXT,
+pay_date TEXT,
     currency TEXT, 
     income_rate TEXT,
     aud2nzd TEXT,
     franked_pct TEXT,
     total TEXT,
     unfranked_pct TEXT,
+unfranked_cfi TEXT,
     supplementary_dividend TEXT,
     tax_rate TEXT,
     is_valid text,
@@ -261,6 +265,7 @@ tax_rate		0.3	Default value per client specific
 
 The form always contains all rows defined in column_map.d_desc. If a field’s value is None, the row is hidden by default.
 Users may add extra rows manually by selecting from a dropdown list of available d_desc fields and entering values or comments.
+	Users can edit the re-pattern by double clicking this cell, the value of this row will change in real time.
 If invalid input is detected, an info bar is displayed in the top-right corner of the interface to alert users.
 	Data Submission Logic with MR Update Interface:
 Once parsing and validation succeed, users may click Submit.
