@@ -75,6 +75,7 @@ class AsxNzData(Base):
     franked_pct = Column(Float(precision=8))
     total = Column(Float(precision=8))
     unfranked_pct = Column(Float(precision=8))
+    unfranked_cfi = Column(Float(precision=8))
     supplementary_dividend = Column(Float(precision=8))
     tax_rate = Column(Float(precision=8))
 
@@ -211,12 +212,15 @@ class ParseTemplateNZ(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     template_name = Column(Text, nullable=False, comment="e.g. asx_dividend, perpetual, etc")
+    ex_date = Column(Text)
+    pay_date = Column(Text)
     currency = Column(Text)
     income_rate = Column(Text)
     aud2nzd = Column(Text)
     franked_pct = Column(Text)
     total = Column(Text)
     unfranked_pct = Column(Text)
+    unfranked_cfi = Column(Text)
     supplementary_dividend = Column(Text)
     tax_rate = Column(Text)
     is_valid = Column(Boolean, default=True)

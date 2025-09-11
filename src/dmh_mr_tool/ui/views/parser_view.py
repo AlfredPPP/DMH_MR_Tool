@@ -9,17 +9,16 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal, QMimeData
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QLineEdit, QTextEdit, QDialog, QDialogButtonBox, QFormLayout,
-    QFileDialog, QCheckBox, QSpinBox, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QDialog, QDialogButtonBox, QFormLayout,
+    QFileDialog
 )
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from qfluentwidgets import (
     CardWidget, StrongBodyLabel, BodyLabel, CaptionLabel,
-    PrimaryPushButton, PushButton, ComboBox as FluentComboBox,
-    LineEdit as FluentLineEdit, InfoBar, InfoBarPosition,
-    FluentIcon as FIF, DatePicker
+    PrimaryPushButton, PushButton, ComboBox, CheckBox,
+    LineEdit, FluentIcon as FIF, DatePicker, TableWidget
 )
 from qasync import asyncSlot
 
@@ -125,7 +124,7 @@ class DragDropArea(CardWidget):
             self.fileDropped.emit(file_path)
 
 
-class ParseResultTable(QTableWidget):
+class ParseResultTable(TableWidget):
     """Table widget for displaying parse results"""
 
     def __init__(self, parent=None):
@@ -224,12 +223,12 @@ class HeaderDialog(QDialog):
         form = QFormLayout()
 
         # Client ID
-        self.clientIdEdit = QLineEdit(self)
+        self.clientIdEdit = LineEdit(self)
         self.clientIdEdit.setText(self.initial_data.get('client_id', ''))
         form.addRow("Client ID:", self.clientIdEdit)
 
         # Asset ID
-        self.assetIdEdit = QLineEdit(self)
+        self.assetIdEdit = LineEdit(self)
         self.assetIdEdit.setText(self.initial_data.get('asset_id', ''))
         form.addRow("Asset ID:", self.assetIdEdit)
 
@@ -246,12 +245,12 @@ class HeaderDialog(QDialog):
         form.addRow("Pay Date:", self.payDatePicker)
 
         # MR Income Rate
-        self.incomeRateEdit = QLineEdit(self)
+        self.incomeRateEdit = LineEdit(self)
         self.incomeRateEdit.setText(str(self.initial_data.get('mr_income_rate', '')))
         form.addRow("MR Income Rate:", self.incomeRateEdit)
 
         # Type
-        self.typeCombo = QComboBox(self)
+        self.typeCombo = ComboBox(self)
         self.typeCombo.addItems(["Other", "Last Actual", "Template - PIII"])
         if 'type' in self.initial_data:
             self.typeCombo.setCurrentText(self.initial_data['type'])
@@ -344,7 +343,7 @@ class ParserInterface(BaseInterface):
         layout.setSpacing(12)
 
         # Template combo box
-        self.templateCombo = FluentComboBox(widget)
+        self.templateCombo = ComboBox(widget)
         self.templateCombo.setMinimumWidth(200)
         self.loadTemplates()
 
@@ -371,7 +370,7 @@ class ParserInterface(BaseInterface):
         self.resultsTable.setMinimumHeight(300)
 
         # Show hidden rows checkbox
-        self.showHiddenCheck = QCheckBox("Show empty fields", self)
+        self.showHiddenCheck = CheckBox("Show empty fields", self)
         self.showHiddenCheck.toggled.connect(self.resultsTable.showHiddenRows)
 
         # Add row button
@@ -429,7 +428,7 @@ class ParserInterface(BaseInterface):
         layout.setSpacing(12)
 
         # Folder path input
-        self.folderPathEdit = FluentLineEdit(widget)
+        self.folderPathEdit = LineEdit(widget)
         self.folderPathEdit.setPlaceholderText("Enter folder path for batch processing")
         self.folderPathEdit.setMinimumWidth(300)
 

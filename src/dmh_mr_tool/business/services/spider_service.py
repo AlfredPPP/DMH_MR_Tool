@@ -102,6 +102,7 @@ class SpiderService:
         Returns:
             Number of URLs synced
         """
+        # TODO For NZ, sync all. For MR, called by MR_Update_interface, limited to the asx_code required.
         synced_count = 0
 
         with self.db_manager.session() as session:
@@ -126,7 +127,7 @@ class SpiderService:
                 try:
                     # Get actual PDF URL
                     pdf_url = await self.asx_spider.get_pdf_actual_url(record.pdf_mask_url)
-                    repo.update(record.id, pdf_url=pdf_url, update_user=USERNAME)
+                    repo.update(record.id, pdf_mask_url=None, pdf_url=pdf_url, update_user=USERNAME)
                     synced_count += 1
 
                     # Emit progress signal

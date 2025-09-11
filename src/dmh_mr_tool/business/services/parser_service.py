@@ -89,7 +89,7 @@ class ParserService:
 
         # Add default templates
         default_templates = [
-            'vanguard_au', 'asx_mit_notice', 'asx_dividend',
+            'vanguard_au', 'asx_nz & tax_marker', 'asx_dividend',
             'perpetual', 'Hi-Trust UR'
         ]
 
