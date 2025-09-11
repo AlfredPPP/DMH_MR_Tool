@@ -12,8 +12,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QDialog, QDialogButtonBox, QFormLayout,
-    QFileDialog, QComboBox, QTextEdit, QLineEdit,
-    QMessageBox
+    QFileDialog
 )
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from qfluentwidgets import (
@@ -51,7 +50,7 @@ class DragDropArea(CardWidget):
         layout.setSpacing(20)
 
         # Icon
-        icon_label = QLabel("📄", self)
+        icon_label = QLabel("📁", self)
         icon_label.setStyleSheet("font-size: 48px;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -72,17 +71,17 @@ class DragDropArea(CardWidget):
         layout.addWidget(sub_label)
         layout.addWidget(self.browseBtn)
 
-        # Styling - Google-like gray drop area
+        # Styling
         self.setStyleSheet("""
             DragDropArea {
-                background-color: #f5f5f5;
-                border: 2px dashed #dadce0;
+                background-color: #f0f0f0;
+                border: 2px dashed #999;
                 border-radius: 8px;
                 min-height: 200px;
             }
             DragDropArea:hover {
-                background-color: #f1f3f4;
-                border-color: #5f6368;
+                background-color: #e8e8e8;
+                border-color: #666;
             }
         """)
 
@@ -91,8 +90,8 @@ class DragDropArea(CardWidget):
             event.acceptProposedAction()
             self.setStyleSheet("""
                 DragDropArea {
-                    background-color: #e8f0fe;
-                    border: 2px dashed #1a73e8;
+                    background-color: #e0f0ff;
+                    border: 2px dashed #0078d4;
                     border-radius: 8px;
                     min-height: 200px;
                 }
@@ -101,8 +100,8 @@ class DragDropArea(CardWidget):
     def dragLeaveEvent(self, event):
         self.setStyleSheet("""
             DragDropArea {
-                background-color: #f5f5f5;
-                border: 2px dashed #dadce0;
+                background-color: #f0f0f0;
+                border: 2px dashed #999;
                 border-radius: 8px;
                 min-height: 200px;
             }
@@ -135,7 +134,7 @@ class EditablePatternDelegate(QWidget):
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
-        self.edit = QLineEdit(initial_pattern)
+        self.edit = LineEdit(initial_pattern)
         self.edit.setToolTip("Double-click to edit pattern")
         self.edit.editingFinished.connect(self.onEditingFinished)
         self.layout.addWidget(self.edit)
@@ -320,7 +319,7 @@ class AddFieldDialog(QDialog):
 
         # Field selection
         form = QFormLayout()
-        self.fieldCombo = QComboBox(self)
+        self.fieldCombo = ComboBox(self)
         for field_name, field_desc in available_fields:
             self.fieldCombo.addItem(field_desc, field_name)
         form.addRow("Select Field:", self.fieldCombo)
@@ -555,15 +554,8 @@ class ParserInterface(BaseInterface):
         self.clearBtn.setIcon(FIF.DELETE)
         self.clearBtn.clicked.connect(self.onClear)
 
-        # Save template button
-        self.saveTemplateBtn = PushButton("Save as Template", widget)
-        self.saveTemplateBtn.setIcon(FIF.SAVE)
-        self.saveTemplateBtn.clicked.connect(self.onSaveTemplate)
-        self.saveTemplateBtn.setEnabled(False)
-
         layout.addWidget(self.submitBtn)
         layout.addWidget(self.clearBtn)
-        layout.addWidget(self.saveTemplateBtn)
         layout.addStretch()
 
         self.body_layout.addWidget(widget)
@@ -652,7 +644,6 @@ class ParserInterface(BaseInterface):
                 self.resultsTable.loadParseResults(results, template_data)
 
                 self.submitBtn.setEnabled(True)
-                self.saveTemplateBtn.setEnabled(True)
 
                 createSuccessInfoBar(self, "Parse Complete", "Document parsed successfully")
             else:
@@ -799,57 +790,6 @@ class ParserInterface(BaseInterface):
         self.resultsTable.setRowCount(0)
         self.parseBtn.setEnabled(False)
         self.submitBtn.setEnabled(False)
-        self.saveTemplateBtn.setEnabled(False)
-
-    def onSaveTemplate(self):
-        """Save current patterns as a new template"""
-        # Get template name from user
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Save Template")
-        dialog.setModal(True)
-
-        layout = QVBoxLayout(dialog)
-
-        form = QFormLayout()
-
-        # Template name
-        name_edit = QLineEdit(dialog)
-        name_edit.setPlaceholderText("Enter template name")
-        form.addRow("Template Name:", name_edit)
-
-        # Template type
-        type_combo = QComboBox(dialog)
-        type_combo.addItems(["MR Template", "NZ Template"])
-        form.addRow("Template Type:", type_combo)
-
-        layout.addLayout(form)
-
-        # Buttons
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            dialog
-        )
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        if dialog.exec():
-            template_name = name_edit.text()
-            is_mr = type_combo.currentIndex() == 0
-
-            if not template_name:
-                createWarningInfoBar(self, "Invalid Name", "Please enter a template name")
-                return
-
-            # Get patterns from table
-            patterns = self.resultsTable.getPatterns()
-
-            # Save template
-            if self.parser_service.save_template(template_name, patterns, is_mr):
-                createSuccessInfoBar(self, "Template Saved", f"Template '{template_name}' saved successfully")
-                self.loadTemplates()  # Reload templates
-            else:
-                createErrorInfoBar(self, "Failed to save template", title="Save Failed")
 
     def onBrowseFolder(self):
         """Browse for folder"""

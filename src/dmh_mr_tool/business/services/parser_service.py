@@ -379,55 +379,6 @@ class ParserService:
 
         return results
 
-    def save_template(self, template_name: str, patterns: Dict[str, str], is_mr: bool = True) -> bool:
-        """
-        Save a new parsing template
-
-        Args:
-            template_name: Name for the template
-            patterns: Dictionary of field_name -> regex_pattern
-            is_mr: True for MR template, False for NZ template
-
-        Returns:
-            True if successful
-        """
-        try:
-            with self.db_manager.session() as session:
-                if is_mr:
-                    # Create MR template
-                    template = ParseTemplateMR(template_name=template_name)
-
-                    # Set patterns for each field
-                    for field_name, pattern in patterns.items():
-                        if hasattr(template, field_name):
-                            setattr(template, field_name, pattern)
-
-                    template.is_valid = True
-                    session.add(template)
-
-                else:
-                    # Create NZ template
-                    template = ParseTemplateNZ(template_name=template_name)
-
-                    for field_name, pattern in patterns.items():
-                        if hasattr(template, field_name):
-                            setattr(template, field_name, pattern)
-
-                    template.is_valid = True
-                    session.add(template)
-
-                session.commit()
-
-                # Clear cache
-                self.templates_cache.pop(template_name, None)
-
-                logger.info(f"Template saved: {template_name}")
-                return True
-
-        except Exception as e:
-            logger.error(f"Failed to save template: {e}")
-            return False
-
     def validate_parse_results(self, results: Dict) -> tuple[bool, List[str]]:
         """
         Validate parse results
